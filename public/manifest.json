@@ -1,0 +1,16 @@
+{
+  "short_name": "Azzurra CC",
+  "name": "Azzurra Champions Cup",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#08090E",
+  "theme_color": "#08090E",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}
