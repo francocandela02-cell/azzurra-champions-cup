@@ -1,5 +1,847 @@
-{
-  "returncode" : 0,
-  "stdout" : "import { useState, useEffect } from \"react\";\nimport { initializeApp } from \"firebase\/app\";\nimport { getFirestore, doc, setDoc, onSnapshot } from \"firebase\/firestore\";\n\nconst firebaseConfig = {\n  apiKey: \"AIzaSyBZ1f5mrIqWlwIUXgG85NDSof7rZoxSst8\",\n  authDomain: \"azzurra-champions-cup.firebaseapp.com\",\n  projectId: \"azzurra-champions-cup\",\n  storageBucket: \"azzurra-champions-cup.firebasestorage.app\",\n  messagingSenderId: \"467270395374\",\n  appId: \"1:467270395374:web:4abe7a67dd989ae1c85aff\",\n  measurementId: \"G-WYJNFKS8HT\"\n};\nconst firebaseApp = initializeApp(firebaseConfig);\nconst db = getFirestore(firebaseApp);\nconst ADMIN_PASSWORD = \"Azzurra2025!Cup\";\n\nconst C = {\n  gold:\"#FFD700\", cyan:\"#00E5FF\", green:\"#00FF87\", pink:\"#FF2D78\",\n  purple:\"#9B5DE5\", orange:\"#FF6B00\", bg:\"#08090E\", card:\"#10131C\",\n  card2:\"#161B2C\", border:\"#1E2540\", muted:\"#5A6480\", text:\"#E8EDF8\",\n};\nconst GROUP_COLORS = { A:C.cyan, B:C.green, C:C.pink, D:C.purple };\n\nconst DEFAULT_GROUPS = {\n  A:[\"Squadra A1\",\"Squadra A2\",\"Squadra A3\",\"Squadra A4\"],\n  B:[\"Squadra B1\",\"Squadra B2\",\"Squadra B3\",\"Squadra B4\"],\n  C:[\"Squadra C1\",\"Squadra C2\",\"Squadra C3\",\"Squadra C4\"],\n  D:[\"Squadra D1\",\"Squadra D2\",\"Squadra D3\",\"Squadra D4\"]\n};\n\nfunction makeMatches(groups) {\n  const all = {};\n  Object.entries(groups).forEach(([g, teams]) => {\n    const matches = [];\n    for (let i = 0; i < teams.length; i++)\n      for (let j = i+1; j < teams.length; j++)\n        matches.push({ id:`${g}${matches.length+1}`, home:teams[i], away:teams[j], homeScore:null, awayScore:null, scorers:{}, played:false });\n    all[g] = matches;\n  });\n  return all;\n}\n\nconst DEFAULT_DATA = {\n  groups: DEFAULT_GROUPS,\n  rosters: Object.fromEntries(Object.values(DEFAULT_GROUPS).flat().map(t => [t, []])),\n  matches: makeMatches(DEFAULT_GROUPS),\n  knockout: {\n    quarters: Array(4).fill(null).map((_,i)=>({id:`Q${i+1}`,home:\"TBD\",away:\"TBD\",homeScore:null,awayScore:null,played:false})),\n    semis: Array(2).fill(null).map((_,i)=>({id:`S${i+1}`,home:\"TBD\",away:\"TBD\",homeScore:null,awayScore:null,played:false})),\n    final: {id:\"F1\",home:\"TBD\",away:\"TBD\",homeScore:null,awayScore:null,played:false}\n  },\n  sponsors: [],\n  events: []\n};\n\n\/\/ ─── UTILS ────────────────────────────────────────────────────────────────────\nfunction computeStandings(groupKey, groups, matches) {\n  const teams = groups[groupKey] || [];\n  const groupMatches = matches[groupKey] || [];\n  const t = {};\n  teams.forEach(n => { t[n]={team:n,played:0,won:0,drawn:0,lost:0,gf:0,ga:0,gd:0,pts:0}; });\n  groupMatches.filter(m=>m.played).forEach(m => {\n    const h=t[m.home], a=t[m.away];\n    if(!h||!a) return;\n    h.played++; a.played++;\n    h.gf+=m.homeScore; h.ga+=m.awayScore;\n    a.gf+=m.awayScore; a.ga+=m.homeScore;\n    if(m.homeScore>m.awayScore){h.won++;h.pts+=3;a.lost++;}\n    else if(m.homeScore<m.awayScore){a.won++;a.pts+=3;h.lost++;}\n    else{h.drawn++;a.drawn++;h.pts++;a.pts++;}\n    h.gd=h.gf-h.ga; a.gd=a.gf-a.ga;\n  });\n  return Object.values(t).sort((a,b)=>b.pts-a.pts||b.gd-a.gd||b.gf-a.gf);\n}\n\nfunction computeScorers(matches) {\n  const tally = {};\n  Object.values(matches).forEach(group => {\n    group.filter(m=>m.played).forEach(m => {\n      Object.values(m.scorers||{}).forEach(players => {\n        players.forEach(p => { if(p) tally[p]=(tally[p]||0)+1; });\n      });\n    });\n  });\n  return Object.entries(tally).map(([name,goals])=>({name,goals})).sort((a,b)=>b.goals-a.goals);\n}\n\nfunction formatEventDate(dateStr) {\n  if(!dateStr) return \"\";\n  try {\n    const d = new Date(dateStr);\n    return d.toLocaleDateString(\"it-IT\", { weekday:\"short\", day:\"numeric\", month:\"short\" });\n  } catch { return dateStr; }\n}\n\n\/\/ ─── SHARED COMPONENTS ────────────────────────────────────────────────────────\nfunction GlowBadge({children,color=C.gold}){\n  return <span style={{background:color+\"28\",border:`1px solid ${color}60`,color,padding:\"3px 10px\",borderRadius:20,fontSize:10,fontFamily:\"'Oswald',sans-serif\",letterSpacing:2,textTransform:\"uppercase\",boxShadow:`0 0 10px ${color}40`}}>{children}<\/span>;\n}\n\nfunction SectionTitle({children,color=C.gold}){\n  return (\n    <div style={{display:\"flex\",alignItems:\"center\",gap:10,margin:\"22px 0 14px\"}}>\n      <div style={{flex:1,height:1,background:`linear-gradient(90deg, ${color}80, transparent)`}}\/>\n      <span style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:14,letterSpacing:4,color,whiteSpace:\"nowrap\"}}>{children}<\/span>\n      <div style={{flex:1,height:1,background:`linear-gradient(270deg, ${color}80, transparent)`}}\/>\n    <\/div>\n  );\n}\n\nfunction ScoreCard({home,away,hScore,aScore,played,accentColor=C.gold}){\n  return (\n    <div style={{background:C.card,border:`1px solid ${played?accentColor+\"50\":C.border}`,borderRadius:12,padding:\"14px 16px\",marginBottom:10,position:\"relative\",overflow:\"hidden\"}}>\n      <div style={{position:\"absolute\",top:0,left:0,right:0,height:3,background:played?`linear-gradient(90deg, ${accentColor}, ${C.cyan})`:C.border}}\/>\n      <div style={{display:\"flex\",alignItems:\"center\",gap:8}}>\n        <span style={{flex:1,fontFamily:\"'Oswald',sans-serif\",fontSize:14,color:C.text,textAlign:\"right\",lineHeight:1.2}}>{home}<\/span>\n        <div style={{display:\"flex\",gap:6,alignItems:\"center\",flexShrink:0}}>\n          <div style={{background:played?`linear-gradient(135deg, ${accentColor}, ${C.orange})`:C.card2,color:played?\"#000\":C.muted,fontFamily:\"'Bebas Neue',sans-serif\",fontSize:26,minWidth:38,textAlign:\"center\",borderRadius:8,padding:\"4px 6px\",boxShadow:played?`0 0 16px ${accentColor}60`:\"none\"}}>{played?hScore:\"-\"}<\/div>\n          <span style={{color:C.muted,fontSize:11,fontFamily:\"'Oswald',sans-serif\"}}>VS<\/span>\n          <div style={{background:played?`linear-gradient(135deg, ${accentColor}, ${C.orange})`:C.card2,color:played?\"#000\":C.muted,fontFamily:\"'Bebas Neue',sans-serif\",fontSize:26,minWidth:38,textAlign:\"center\",borderRadius:8,padding:\"4px 6px\",boxShadow:played?`0 0 16px ${accentColor}60`:\"none\"}}>{played?aScore:\"-\"}<\/div>\n        <\/div>\n        <span style={{flex:1,fontFamily:\"'Oswald',sans-serif\",fontSize:14,color:C.text,lineHeight:1.2}}>{away}<\/span>\n      <\/div>\n      {!played&&<div style={{textAlign:\"center\",marginTop:8}}><GlowBadge color={C.muted}>In programma<\/GlowBadge><\/div>}\n    <\/div>\n  );\n}\n\nfunction GroupTab({label,active,color,onClick}){\n  return <button onClick={onClick} style={{flex:1,padding:\"10px 0\",borderRadius:10,border:\"none\",cursor:\"pointer\",background:active?`linear-gradient(135deg, ${color}, ${color}88)`:C.card2,color:active?\"#000\":C.muted,fontFamily:\"'Bebas Neue',sans-serif\",fontSize:20,letterSpacing:2,boxShadow:active?`0 4px 20px ${color}60`:\"none\",outline:active?\"none\":`1px solid ${C.border}`}}>Girone {label}<\/button>;\n}\n\n\/\/ ─── ADMIN PANEL ──────────────────────────────────────────────────────────────\nfunction AdminPanel({data, onSave, onClose}){\n  const [tab, setTab] = useState(\"teams\");\n  const [localData, setLocalData] = useState(JSON.parse(JSON.stringify(data)));\n  const [saving, setSaving] = useState(false);\n\n  const save = async () => {\n    setSaving(true);\n    await onSave(localData);\n    setSaving(false);\n    alert(\"Salvato!\");\n  };\n\n  \/\/ BUG FIX: deep clone ogni volta per evitare mutazioni di stato\n  const updateMatchScore = (g, idx, field, val) => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    newData.matches[g][idx][field] = val === \"\" ? null : parseInt(val);\n    if(newData.matches[g][idx].homeScore !== null && newData.matches[g][idx].awayScore !== null)\n      newData.matches[g][idx].played = true;\n    else\n      newData.matches[g][idx].played = false;\n    setLocalData(newData);\n  };\n\n  const updateKnockoutScore = (round, idx, field, val) => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    if(round === \"final\"){\n      newData.knockout.final[field] = val === \"\" ? null : parseInt(val);\n      newData.knockout.final.played = newData.knockout.final.homeScore !== null && newData.knockout.final.awayScore !== null;\n    } else {\n      newData.knockout[round][idx][field] = val === \"\" ? null : parseInt(val);\n      newData.knockout[round][idx].played = newData.knockout[round][idx].homeScore !== null && newData.knockout[round][idx].awayScore !== null;\n    }\n    setLocalData(newData);\n  };\n\n  const updateKnockoutTeam = (round, idx, field, val) => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    if(round === \"final\") newData.knockout.final[field] = val;\n    else newData.knockout[round][idx][field] = val;\n    setLocalData(newData);\n  };\n\n  const updateTeamName = (g, tIdx, val) => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    const oldName = newData.groups[g][tIdx];\n    newData.groups[g][tIdx] = val;\n    newData.matches[g] = newData.matches[g].map(m => ({\n      ...m,\n      home: m.home === oldName ? val : m.home,\n      away: m.away === oldName ? val : m.away,\n      scorers: Object.fromEntries(Object.entries(m.scorers).map(([k,v]) => [k===oldName?val:k, v]))\n    }));\n    if(newData.rosters[oldName]){ newData.rosters[val] = newData.rosters[oldName]; delete newData.rosters[oldName]; }\n    setLocalData(newData);\n  };\n\n  const updateRoster = (team, playerIdx, val) => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    if(!newData.rosters[team]) newData.rosters[team] = [];\n    newData.rosters[team][playerIdx] = val;\n    setLocalData(newData);\n  };\n\n  const addPlayer = (team) => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    if(!newData.rosters[team]) newData.rosters[team] = [];\n    newData.rosters[team].push(\"\");\n    setLocalData(newData);\n  };\n\n  const removePlayer = (team, idx) => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    newData.rosters[team].splice(idx, 1);\n    setLocalData(newData);\n  };\n\n  const addScorer = (g, mIdx, team) => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    if(!newData.matches[g][mIdx].scorers[team]) newData.matches[g][mIdx].scorers[team] = [];\n    newData.matches[g][mIdx].scorers[team].push(\"\");\n    setLocalData(newData);\n  };\n\n  const updateScorer = (g, mIdx, team, sIdx, val) => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    newData.matches[g][mIdx].scorers[team][sIdx] = val;\n    setLocalData(newData);\n  };\n\n  const removeScorer = (g, mIdx, team, sIdx) => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    newData.matches[g][mIdx].scorers[team].splice(sIdx, 1);\n    setLocalData(newData);\n  };\n\n  \/\/ EVENTI\n  const addEvent = () => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    if(!newData.events) newData.events = [];\n    newData.events.push({ id: Date.now().toString(), date:\"\", title:\"\", description:\"\", color: C.cyan });\n    setLocalData(newData);\n  };\n\n  const updateEvent = (idx, field, val) => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    newData.events[idx][field] = val;\n    setLocalData(newData);\n  };\n\n  const removeEvent = (idx) => {\n    const newData = JSON.parse(JSON.stringify(localData));\n    newData.events.splice(idx, 1);\n    setLocalData(newData);\n  };\n\n  const inputStyle = {background:C.card2,border:`1px solid ${C.border}`,color:C.text,padding:\"8px 10px\",borderRadius:8,fontFamily:\"'Oswald',sans-serif\",fontSize:14,width:\"100%\"};\n  const btnStyle = (color) => ({background:`linear-gradient(135deg, ${color}, ${color}88)`,border:\"none\",color:\"#000\",padding:\"10px 16px\",borderRadius:8,cursor:\"pointer\",fontFamily:\"'Bebas Neue',sans-serif\",fontSize:16,letterSpacing:1});\n\n  const TABS = [\n    {id:\"teams\",label:\"Squadre\"},\n    {id:\"rosters\",label:\"Distinte\"},\n    {id:\"results\",label:\"Risultati\"},\n    {id:\"knockout\",label:\"Eliminazione\"},\n    {id:\"events\",label:\"📅 Calendario\"}\n  ];\n\n  return (\n    <div style={{position:\"fixed\",inset:0,background:\"rgba(0,0,0,0.95)\",zIndex:100,overflowY:\"auto\"}}>\n      <div style={{maxWidth:480,margin:\"0 auto\",padding:\"16px 16px 100px\"}}>\n        <div style={{display:\"flex\",justifyContent:\"space-between\",alignItems:\"center\",marginBottom:20}}>\n          <div style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:28,color:C.gold,letterSpacing:3}}>🔐 ADMIN<\/div>\n          <button onClick={onClose} style={{background:C.card2,border:`1px solid ${C.border}`,color:C.muted,padding:\"8px 14px\",borderRadius:8,cursor:\"pointer\",fontFamily:\"'Oswald',sans-serif\",fontSize:13}}>✕ Chiudi<\/button>\n        <\/div>\n\n        <div style={{display:\"flex\",gap:6,marginBottom:20,flexWrap:\"wrap\"}}>\n          {TABS.map(t=>(\n            <button key={t.id} onClick={()=>setTab(t.id)} style={{padding:\"8px 14px\",borderRadius:8,border:\"none\",cursor:\"pointer\",background:tab===t.id?C.gold:C.card2,color:tab===t.id?\"#000\":C.muted,fontFamily:\"'Oswald',sans-serif\",fontSize:12,letterSpacing:1}}>\n              {t.label}\n            <\/button>\n          ))}\n        <\/div>\n\n        {\/* SQUADRE *\/}\n        {tab===\"teams\" && (\n          <div>\n            <SectionTitle color={C.cyan}>Nomi Squadre<\/SectionTitle>\n            {Object.entries(localData.groups).map(([g,teams])=>(\n              <div key={g} style={{marginBottom:20}}>\n                <div style={{color:GROUP_COLORS[g],fontFamily:\"'Bebas Neue',sans-serif\",fontSize:16,letterSpacing:3,marginBottom:8}}>GIRONE {g}<\/div>\n                {teams.map((team,tIdx)=>(\n                  <input key={tIdx} value={team} onChange={e=>updateTeamName(g,tIdx,e.target.value)} style={{...inputStyle,marginBottom:8}} placeholder={`Squadra ${g}${tIdx+1}`}\/>\n                ))}\n              <\/div>\n            ))}\n          <\/div>\n        )}\n\n        {\/* DISTINTE *\/}\n        {tab===\"rosters\" && (\n          <div>\n            <SectionTitle color={C.purple}>Rosa Squadre<\/SectionTitle>\n            {Object.entries(localData.groups).map(([g,teams])=>\n              teams.map(team=>(\n                <div key={team} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:14,marginBottom:12}}>\n                  <div style={{color:GROUP_COLORS[g],fontFamily:\"'Bebas Neue',sans-serif\",fontSize:16,letterSpacing:2,marginBottom:10}}>{team}<\/div>\n                  {(localData.rosters[team]||[]).map((player,pIdx)=>(\n                    <div key={pIdx} style={{display:\"flex\",gap:8,marginBottom:8}}>\n                      <input value={player} onChange={e=>updateRoster(team,pIdx,e.target.value)} style={{...inputStyle,flex:1}} placeholder=\"Nome giocatore\"\/>\n                      <button onClick={()=>removePlayer(team,pIdx)} style={{background:\"#ff2d7830\",border:\"1px solid #ff2d7860\",color:C.pink,padding:\"8px 12px\",borderRadius:8,cursor:\"pointer\",fontSize:14}}>✕<\/button>\n                    <\/div>\n                  ))}\n                  <button onClick={()=>addPlayer(team)} style={{background:`${GROUP_COLORS[g]}20`,border:`1px solid ${GROUP_COLORS[g]}50`,color:GROUP_COLORS[g],padding:\"8px 16px\",borderRadius:8,cursor:\"pointer\",fontFamily:\"'Oswald',sans-serif\",fontSize:13,width:\"100%\",marginTop:4}}>+ Aggiungi giocatore<\/button>\n                <\/div>\n              ))\n            )}\n          <\/div>\n        )}\n\n        {\/* RISULTATI GIRONI *\/}\n        {tab===\"results\" && (\n          <div>\n            <SectionTitle color={C.pink}>Risultati Gironi<\/SectionTitle>\n            {Object.entries(localData.matches).map(([g,gMatches])=>(\n              <div key={g} style={{marginBottom:20}}>\n                <div style={{color:GROUP_COLORS[g],fontFamily:\"'Bebas Neue',sans-serif\",fontSize:16,letterSpacing:3,marginBottom:8}}>GIRONE {g}<\/div>\n                {gMatches.map((m,mIdx)=>(\n                  <div key={m.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginBottom:10}}>\n                    <div style={{display:\"flex\",alignItems:\"center\",gap:8,marginBottom:8}}>\n                      <span style={{flex:1,fontFamily:\"'Oswald',sans-serif\",fontSize:13,color:C.text,textAlign:\"right\"}}>{m.home}<\/span>\n                      <input type=\"number\" min=\"0\" value={m.homeScore??\"\"} onChange={e=>updateMatchScore(g,mIdx,\"homeScore\",e.target.value)} style={{...inputStyle,width:50,textAlign:\"center\",padding:\"6px 4px\"}}\/>\n                      <span style={{color:C.muted,fontSize:11}}>-<\/span>\n                      <input type=\"number\" min=\"0\" value={m.awayScore??\"\"} onChange={e=>updateMatchScore(g,mIdx,\"awayScore\",e.target.value)} style={{...inputStyle,width:50,textAlign:\"center\",padding:\"6px 4px\"}}\/>\n                      <span style={{flex:1,fontFamily:\"'Oswald',sans-serif\",fontSize:13,color:C.text}}>{m.away}<\/span>\n                    <\/div>\n                    {m.played && (\n                      <div>\n                        <div style={{fontSize:11,color:C.muted,marginBottom:6,fontFamily:\"'Oswald',sans-serif\",letterSpacing:1}}>MARCATORI<\/div>\n                        {[m.home,m.away].map(team=>(\n                          <div key={team} style={{marginBottom:8}}>\n                            <div style={{fontSize:11,color:GROUP_COLORS[g],fontFamily:\"'Oswald',sans-serif\",marginBottom:4}}>{team}<\/div>\n                            {(m.scorers[team]||[]).map((s,sIdx)=>(\n                              <div key={sIdx} style={{display:\"flex\",gap:6,marginBottom:4}}>\n                                <input value={s} onChange={e=>updateScorer(g,mIdx,team,sIdx,e.target.value)} style={{...inputStyle,flex:1,padding:\"5px 8px\"}} placeholder=\"Nome marcatore\"\/>\n                                <button onClick={()=>removeScorer(g,mIdx,team,sIdx)} style={{background:\"#ff2d7820\",border:\"1px solid #ff2d7840\",color:C.pink,padding:\"5px 10px\",borderRadius:6,cursor:\"pointer\"}}>✕<\/button>\n                              <\/div>\n                            ))}\n                            <button onClick={()=>addScorer(g,mIdx,team)} style={{background:`${GROUP_COLORS[g]}15`,border:`1px solid ${GROUP_COLORS[g]}40`,color:GROUP_COLORS[g],padding:\"5px 12px\",borderRadius:6,cursor:\"pointer\",fontFamily:\"'Oswald',sans-serif\",fontSize:11,width:\"100%\"}}>+ Gol {team}<\/button>\n                          <\/div>\n                        ))}\n                      <\/div>\n                    )}\n                  <\/div>\n                ))}\n              <\/div>\n            ))}\n          <\/div>\n        )}\n\n        {\/* ELIMINAZIONE *\/}\n        {tab===\"knockout\" && (\n          <div>\n            <SectionTitle color={C.gold}>Fase ad Eliminazione<\/SectionTitle>\n            {[{label:\"Quarti di Finale\",key:\"quarters\"},{label:\"Semifinali\",key:\"semis\"}].map(({label,key})=>(\n              <div key={key} style={{marginBottom:20}}>\n                <div style={{color:C.gold,fontFamily:\"'Bebas Neue',sans-serif\",fontSize:16,letterSpacing:3,marginBottom:8}}>{label}<\/div>\n                {localData.knockout[key].map((m,idx)=>(\n                  <div key={m.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginBottom:8}}>\n                    <div style={{display:\"flex\",gap:8,marginBottom:8}}>\n                      <input value={m.home} onChange={e=>updateKnockoutTeam(key,idx,\"home\",e.target.value)} style={{...inputStyle,flex:1}} placeholder=\"Squadra casa\"\/>\n                      <input value={m.away} onChange={e=>updateKnockoutTeam(key,idx,\"away\",e.target.value)} style={{...inputStyle,flex:1}} placeholder=\"Squadra ospite\"\/>\n                    <\/div>\n                    <div style={{display:\"flex\",alignItems:\"center\",gap:8}}>\n                      <input type=\"number\" min=\"0\" value={m.homeScore??\"\"} onChange={e=>updateKnockoutScore(key,idx,\"homeScore\",e.target.value)} style={{...inputStyle,width:60,textAlign:\"center\"}}\/>\n                      <span style={{color:C.muted}}>-<\/span>\n                      <input type=\"number\" min=\"0\" value={m.awayScore??\"\"} onChange={e=>updateKnockoutScore(key,idx,\"awayScore\",e.target.value)} style={{...inputStyle,width:60,textAlign:\"center\"}}\/>\n                    <\/div>\n                  <\/div>\n                ))}\n              <\/div>\n            ))}\n            <div style={{color:C.gold,fontFamily:\"'Bebas Neue',sans-serif\",fontSize:16,letterSpacing:3,marginBottom:8}}>FINALE<\/div>\n            <div style={{background:C.card,border:`1px solid ${C.gold}50`,borderRadius:10,padding:12}}>\n              <div style={{display:\"flex\",gap:8,marginBottom:8}}>\n                <input value={localData.knockout.final.home} onChange={e=>updateKnockoutTeam(\"final\",0,\"home\",e.target.value)} style={{...inputStyle,flex:1}} placeholder=\"Squadra casa\"\/>\n                <input value={localData.knockout.final.away} onChange={e=>updateKnockoutTeam(\"final\",0,\"away\",e.target.value)} style={{...inputStyle,flex:1}} placeholder=\"Squadra ospite\"\/>\n              <\/div>\n              <div style={{display:\"flex\",alignItems:\"center\",gap:8}}>\n                <input type=\"number\" min=\"0\" value={localData.knockout.final.homeScore??\"\"} onChange={e=>updateKnockoutScore(\"final\",0,\"homeScore\",e.target.value)} style={{...inputStyle,width:60,textAlign:\"center\"}}\/>\n                <span style={{color:C.muted}}>-<\/span>\n                <input type=\"number\" min=\"0\" value={localData.knockout.final.awayScore??\"\"} onChange={e=>updateKnockoutScore(\"final\",0,\"awayScore\",e.target.value)} style={{...inputStyle,width:60,textAlign:\"center\"}}\/>\n              <\/div>\n            <\/div>\n          <\/div>\n        )}\n\n        {\/* CALENDARIO EVENTI *\/}\n        {tab===\"events\" && (\n          <div>\n            <SectionTitle color={C.cyan}>📅 Calendario Eventi<\/SectionTitle>\n            <div style={{fontSize:12,color:C.muted,marginBottom:16,fontFamily:\"'Oswald',sans-serif\"}}>\n              Aggiungi eventi che appariranno nella Home (partite, cerimonie, premi...)\n            <\/div>\n            {(localData.events||[]).map((ev,idx)=>(\n              <div key={ev.id||idx} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:14,marginBottom:12}}>\n                <div style={{display:\"flex\",gap:8,marginBottom:8}}>\n                  <input\n                    type=\"date\"\n                    value={ev.date}\n                    onChange={e=>updateEvent(idx,\"date\",e.target.value)}\n                    style={{...inputStyle,flex:1,colorScheme:\"dark\"}}\n                  \/>\n                  <select value={ev.color} onChange={e=>updateEvent(idx,\"color\",e.target.value)}\n                    style={{...inputStyle,width:50,padding:\"8px 4px\",cursor:\"pointer\"}}>\n                    <option value={C.cyan}>🔵<\/option>\n                    <option value={C.gold}>🟡<\/option>\n                    <option value={C.green}>🟢<\/option>\n                    <option value={C.pink}>🔴<\/option>\n                    <option value={C.purple}>🟣<\/option>\n                    <option value={C.orange}>🟠<\/option>\n                  <\/select>\n                  <button onClick={()=>removeEvent(idx)} style={{background:\"#ff2d7830\",border:\"1px solid #ff2d7860\",color:C.pink,padding:\"8px 12px\",borderRadius:8,cursor:\"pointer\",fontSize:14,flexShrink:0}}>✕<\/button>\n                <\/div>\n                <input\n                  value={ev.title}\n                  onChange={e=>updateEvent(idx,\"title\",e.target.value)}\n                  placeholder=\"Titolo evento (es: Girone A - Fase 1)\"\n                  style={{...inputStyle,marginBottom:8}}\n                \/>\n                <input\n                  value={ev.description||\"\"}\n                  onChange={e=>updateEvent(idx,\"description\",e.target.value)}\n                  placeholder=\"Descrizione (opzionale, es: Ore 18:00 - Campo A)\"\n                  style={{...inputStyle}}\n                \/>\n              <\/div>\n            ))}\n            <button onClick={addEvent} style={{background:`${C.cyan}20`,border:`1px solid ${C.cyan}50`,color:C.cyan,padding:\"12px 16px\",borderRadius:10,cursor:\"pointer\",fontFamily:\"'Oswald',sans-serif\",fontSize:14,width:\"100%\",marginTop:4}}>\n              + Aggiungi Evento\n            <\/button>\n          <\/div>\n        )}\n\n        <div style={{position:\"fixed\",bottom:0,left:\"50%\",transform:\"translateX(-50%)\",width:\"100%\",maxWidth:480,padding:\"12px 16px\",background:C.bg,borderTop:`1px solid ${C.border}`}}>\n          <button onClick={save} disabled={saving} style={{...btnStyle(C.gold),width:\"100%\",fontSize:18,padding:\"14px\",opacity:saving?0.7:1}}>\n            {saving?\"Salvataggio...\":\"💾 SALVA TUTTO\"}\n          <\/button>\n        <\/div>\n      <\/div>\n    <\/div>\n  );\n}\n\n\/\/ ─── PAGES ────────────────────────────────────────────────────────────────────\nfunction EventsCalendar({events}){\n  if(!events||events.length===0) return null;\n  const sorted = [...events].sort((a,b)=>a.date>b.date?1:-1);\n  const today = new Date().toISOString().split(\"T\")[0];\n\n  return (\n    <div style={{padding:\"0 16px\"}}>\n      <SectionTitle color={C.cyan}>📅 Programma<\/SectionTitle>\n      {sorted.map((ev,i)=>{\n        const isPast = ev.date && ev.date < today;\n        const isToday = ev.date === today;\n        const color = ev.color || C.cyan;\n        return (\n          <div key={ev.id||i} style={{\n            display:\"flex\",gap:14,alignItems:\"stretch\",marginBottom:10,\n            opacity: isPast ? 0.55 : 1\n          }}>\n            {\/* colonna data *\/}\n            <div style={{\n              display:\"flex\",flexDirection:\"column\",alignItems:\"center\",justifyContent:\"center\",\n              minWidth:52,background:isToday?`linear-gradient(135deg,${color},${color}88)`:C.card2,\n              borderRadius:10,padding:\"8px 4px\",\n              border:`1px solid ${isToday?color:C.border}`,\n              boxShadow:isToday?`0 0 16px ${color}60`:\"none\"\n            }}>\n              {ev.date ? (\n                <>\n                  <span style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:22,color:isToday?\"#000\":color,lineHeight:1}}>\n                    {new Date(ev.date+\"T00:00:00\").getDate()}\n                  <\/span>\n                  <span style={{fontFamily:\"'Oswald',sans-serif\",fontSize:9,color:isToday?\"#000\":C.muted,letterSpacing:1,textTransform:\"uppercase\"}}>\n                    {new Date(ev.date+\"T00:00:00\").toLocaleDateString(\"it-IT\",{month:\"short\"})}\n                  <\/span>\n                <\/>\n              ) : (\n                <span style={{fontFamily:\"'Oswald',sans-serif\",fontSize:9,color:C.muted}}>TBD<\/span>\n              )}\n            <\/div>\n            {\/* contenuto *\/}\n            <div style={{\n              flex:1,background:C.card,border:`1px solid ${isToday?color+\"50\":C.border}`,\n              borderRadius:10,padding:\"10px 14px\",\n              borderLeft:`3px solid ${color}`,\n              position:\"relative\",overflow:\"hidden\"\n            }}>\n              {isToday && <div style={{position:\"absolute\",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${color},transparent)`}}\/>}\n              <div style={{display:\"flex\",alignItems:\"center\",gap:8}}>\n                <span style={{fontFamily:\"'Oswald',sans-serif\",fontSize:14,color:C.text,fontWeight:600,flex:1}}>{ev.title||\"Evento\"}<\/span>\n                {isToday && <GlowBadge color={color}>OGGI<\/GlowBadge>}\n                {isPast && <span style={{fontSize:10,color:C.muted,fontFamily:\"'Oswald',sans-serif\",letterSpacing:1}}>CONCLUSO<\/span>}\n              <\/div>\n              {ev.description && (\n                <div style={{fontSize:12,color:C.muted,marginTop:4,fontFamily:\"'Oswald',sans-serif\"}}>{ev.description}<\/div>\n              )}\n            <\/div>\n          <\/div>\n        );\n      })}\n    <\/div>\n  );\n}\n\nfunction HomePage({data}){\n  const scorers = computeScorers(data.matches).slice(0,3);\n  const totalGoals = Object.values(data.matches).flat().filter(m=>m.played).reduce((a,m)=>a+m.homeScore+m.awayScore,0);\n  const playedCount = Object.values(data.matches).flat().filter(m=>m.played).length;\n\n  return (\n    <div>\n      {\/* Hero *\/}\n      <div style={{textAlign:\"center\",padding:\"44px 20px 32px\",background:`radial-gradient(ellipse at 50% -10%, ${C.cyan}18 0%, ${C.purple}10 40%, transparent 70%)`,borderBottom:`1px solid ${C.border}`,position:\"relative\",overflow:\"hidden\"}}>\n        <div style={{fontSize:11,letterSpacing:5,color:C.cyan,fontFamily:\"'Oswald',sans-serif\",marginBottom:6,textTransform:\"uppercase\"}}>⚽ Stagione 2026<\/div>\n        <div style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:58,lineHeight:1,letterSpacing:5,background:`linear-gradient(135deg, #fff 0%, ${C.cyan} 50%, ${C.gold} 100%)`,WebkitBackgroundClip:\"text\",WebkitTextFillColor:\"transparent\"}}>AZZURRA<\/div>\n        <div style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:26,letterSpacing:6,background:`linear-gradient(90deg, ${C.gold}, ${C.orange})`,WebkitBackgroundClip:\"text\",WebkitTextFillColor:\"transparent\"}}>CHAMPIONS CUP<\/div>\n        <div style={{marginTop:16,display:\"flex\",gap:8,justifyContent:\"center\",flexWrap:\"wrap\"}}>\n          <GlowBadge color={C.cyan}>16 squadre<\/GlowBadge>\n          <GlowBadge color={C.gold}>3 giorni<\/GlowBadge>\n          <GlowBadge color={C.green}>31 partite<\/GlowBadge>\n        <\/div>\n      <\/div>\n\n      {\/* Stats *\/}\n      <div style={{padding:\"20px 16px 0\"}}>\n        <div style={{display:\"grid\",gridTemplateColumns:\"1fr 1fr 1fr\",gap:10}}>\n          {[{label:\"Partite giocate\",value:playedCount,color:C.cyan},{label:\"Goal totali\",value:totalGoals,color:C.green},{label:\"Marcatori\",value:computeScorers(data.matches).length,color:C.pink}].map(s=>(\n            <div key={s.label} style={{background:`linear-gradient(135deg, ${s.color}18, ${C.card})`,border:`1px solid ${s.color}40`,borderRadius:12,padding:\"16px 8px\",textAlign:\"center\"}}>\n              <div style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:38,color:s.color,lineHeight:1,textShadow:`0 0 20px ${s.color}`}}>{s.value}<\/div>\n              <div style={{fontSize:9,color:C.muted,marginTop:5,fontFamily:\"'Oswald',sans-serif\",letterSpacing:1,textTransform:\"uppercase\",lineHeight:1.3}}>{s.label}<\/div>\n            <\/div>\n          ))}\n        <\/div>\n      <\/div>\n\n      {\/* Calendario *\/}\n      <EventsCalendar events={data.events} \/>\n\n      {\/* Top 3 Marcatori *\/}\n      {scorers.length > 0 && (\n        <div style={{padding:\"0 16px\"}}>\n          <SectionTitle color={C.gold}>🥅 Top Marcatori<\/SectionTitle>\n          {scorers.map((s,i)=>{\n            const colors=[C.gold,\"#C0C0C0\",\"#CD7F32\"];\n            const medals=[\"🥇\",\"🥈\",\"🥉\"];\n            return (\n              <div key={s.name} style={{display:\"flex\",alignItems:\"center\",gap:12,background:i===0?`linear-gradient(135deg, ${C.gold}18, ${C.card})`:C.card,border:`1px solid ${i===0?C.gold+\"50\":C.border}`,borderRadius:12,padding:\"12px 16px\",marginBottom:8}}>\n                <span style={{fontSize:24,minWidth:32}}>{medals[i]}<\/span>\n                <span style={{flex:1,fontFamily:\"'Oswald',sans-serif\",fontSize:16,color:C.text}}>{s.name}<\/span>\n                <div style={{display:\"flex\",alignItems:\"center\",gap:4}}>\n                  <span style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:28,color:colors[i],textShadow:`0 0 12px ${colors[i]}`}}>{s.goals}<\/span>\n                  <span style={{fontSize:16}}>⚽<\/span>\n                <\/div>\n              <\/div>\n            );\n          })}\n        <\/div>\n      )}\n\n      {\/* Sponsor *\/}\n      {data.sponsors && data.sponsors.length > 0 && (\n        <div style={{padding:\"0 16px 16px\"}}>\n          <SectionTitle color={C.orange}>🤝 Sponsor<\/SectionTitle>\n          <div style={{display:\"flex\",flexWrap:\"wrap\",gap:8}}>\n            {data.sponsors.map((s,i)=>(\n              <div key={i} style={{background:`linear-gradient(135deg, ${C.orange}18, ${C.card})`,border:`1px solid ${C.orange}40`,borderRadius:10,padding:\"10px 16px\",fontFamily:\"'Oswald',sans-serif\",fontSize:14,color:C.text}}>{s}<\/div>\n            ))}\n          <\/div>\n        <\/div>\n      )}\n\n      <div style={{height:16}}\/>\n    <\/div>\n  );\n}\n\nfunction GroupsPage({data}){\n  const [active,setActive]=useState(\"A\");\n  const color=GROUP_COLORS[active];\n  const standings=computeStandings(active,data.groups,data.matches);\n  return (\n    <div style={{padding:\"0 16px 16px\"}}>\n      <div style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:30,letterSpacing:4,textAlign:\"center\",marginTop:20,marginBottom:16,background:`linear-gradient(90deg, ${C.cyan}, ${C.gold})`,WebkitBackgroundClip:\"text\",WebkitTextFillColor:\"transparent\"}}>CLASSIFICHE GIRONI<\/div>\n      <div style={{display:\"flex\",gap:8,marginBottom:20}}>\n        {[\"A\",\"B\",\"C\",\"D\"].map(g=><GroupTab key={g} label={g} active={active===g} color={GROUP_COLORS[g]} onClick={()=>setActive(g)}\/>)}\n      <\/div>\n      <div style={{background:C.card,border:`1px solid ${color}40`,borderRadius:12,overflow:\"hidden\",boxShadow:`0 4px 30px ${color}20`}}>\n        <div style={{height:3,background:`linear-gradient(90deg, ${color}, ${C.cyan})`}}\/>\n        <div style={{display:\"grid\",gridTemplateColumns:\"22px 1fr 26px 26px 26px 26px 26px 26px 30px\",gap:4,padding:\"10px 12px\",background:C.card2}}>\n          {[\"#\",\"Squadra\",\"G\",\"V\",\"P\",\"S\",\"GF\",\"GA\",\"Pts\"].map(h=><span key={h} style={{fontFamily:\"'Oswald',sans-serif\",fontSize:11,color:C.muted,textAlign:\"center\",letterSpacing:1}}>{h}<\/span>)}\n        <\/div>\n        {standings.map((row,i)=>(\n          <div key={row.team} style={{display:\"grid\",gridTemplateColumns:\"22px 1fr 26px 26px 26px 26px 26px 26px 30px\",gap:4,padding:\"12px 12px\",alignItems:\"center\",borderTop:`1px solid ${C.border}`,background:i<2?`${color}0A`:\"transparent\"}}>\n            <span style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:16,color:i<2?color:C.muted,textAlign:\"center\"}}>{i+1}<\/span>\n            <span style={{fontFamily:\"'Oswald',sans-serif\",fontSize:12,color:C.text,whiteSpace:\"nowrap\",overflow:\"hidden\",textOverflow:\"ellipsis\"}}>{row.team}<\/span>\n            {[row.played,row.won,row.drawn,row.lost,row.gf,row.ga].map((v,j)=><span key={j} style={{fontFamily:\"'Oswald',sans-serif\",fontSize:13,color:C.muted,textAlign:\"center\"}}>{v}<\/span>)}\n            <span style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:20,color:i<2?color:C.text,textAlign:\"center\",textShadow:i<2?`0 0 10px ${color}`:\"none\"}}>{row.pts}<\/span>\n          <\/div>\n        ))}\n      <\/div>\n      <div style={{textAlign:\"center\",marginTop:10,fontSize:11,color:C.muted}}>Le prime 2 si qualificano ai quarti di finale<\/div>\n    <\/div>\n  );\n}\n\nfunction ResultsPage({data}){\n  const [active,setActive]=useState(\"A\");\n  const color=GROUP_COLORS[active];\n  return (\n    <div style={{padding:\"0 16px 16px\"}}>\n      <div style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:30,letterSpacing:4,textAlign:\"center\",marginTop:20,marginBottom:16,background:`linear-gradient(90deg, ${C.pink}, ${C.orange})`,WebkitBackgroundClip:\"text\",WebkitTextFillColor:\"transparent\"}}>RISULTATI<\/div>\n      <div style={{display:\"flex\",gap:8,marginBottom:20}}>\n        {[\"A\",\"B\",\"C\",\"D\"].map(g=><GroupTab key={g} label={g} active={active===g} color={GROUP_COLORS[g]} onClick={()=>setActive(g)}\/>)}\n      <\/div>\n      {(data.matches[active]||[]).map(m=>(\n        <div key={m.id}>\n          <ScoreCard home={m.home} away={m.away} hScore={m.homeScore} aScore={m.awayScore} played={m.played} accentColor={color}\/>\n          {m.played && Object.values(m.scorers||{}).some(a=>a.length>0) && (\n            <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:\"0 0 10px 10px\",padding:\"8px 14px\",marginTop:-12,marginBottom:10}}>\n              {Object.entries(m.scorers).map(([team,players])=>players.length>0&&(\n                <div key={team} style={{fontSize:12,color:C.muted,marginBottom:2}}>\n                  <span style={{color,fontFamily:\"'Oswald',sans-serif\"}}>{team}:<\/span> {players.filter(p=>p).join(\", \")}\n                <\/div>\n              ))}\n            <\/div>\n          )}\n        <\/div>\n      ))}\n    <\/div>\n  );\n}\n\nfunction ScorersPage({data}){\n  const scorers=computeScorers(data.matches);\n  const gradients=[`linear-gradient(135deg, ${C.gold}, ${C.orange})`,`linear-gradient(135deg, #C0C0C0, #888)`,`linear-gradient(135deg, #CD7F32, #8B4513)`];\n  return (\n    <div style={{padding:\"0 16px 16px\"}}>\n      <div style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:30,letterSpacing:4,textAlign:\"center\",marginTop:20,marginBottom:16,background:`linear-gradient(90deg, ${C.green}, ${C.cyan})`,WebkitBackgroundClip:\"text\",WebkitTextFillColor:\"transparent\"}}>CAPOCANNONIERI<\/div>\n      {scorers.length===0 && <div style={{textAlign:\"center\",color:C.muted,fontFamily:\"'Oswald',sans-serif\",marginTop:40}}>Nessun gol ancora segnato<\/div>}\n      {scorers.map((s,i)=>{\n        const isTop3=i<3;\n        return (\n          <div key={s.name} style={{display:\"flex\",alignItems:\"center\",gap:14,background:C.card,border:`1px solid ${isTop3?(i===0?C.gold:i===1?\"#C0C0C0\":\"#CD7F32\")+\"60\":C.border}`,borderRadius:12,padding:\"14px 16px\",marginBottom:8,position:\"relative\",overflow:\"hidden\"}}>\n            {isTop3&&<div style={{position:\"absolute\",left:0,top:0,bottom:0,width:4,background:gradients[i]}}\/>}\n            <span style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:isTop3?28:18,minWidth:38,textAlign:\"center\"}}>{isTop3?[\"🥇\",\"🥈\",\"🥉\"][i]:i+1}<\/span>\n            <span style={{flex:1,fontFamily:\"'Oswald',sans-serif\",fontSize:16,color:C.text}}>{s.name}<\/span>\n            <div style={{display:\"flex\",alignItems:\"center\",gap:6}}>\n              <span style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:30,color:isTop3?[C.gold,\"#C0C0C0\",\"#CD7F32\"][i]:C.text}}>{s.goals}<\/span>\n              <span>⚽<\/span>\n            <\/div>\n          <\/div>\n        );\n      })}\n    <\/div>\n  );\n}\n\nfunction RostersPage({data}){\n  const [activeTeam,setActiveTeam]=useState(null);\n  return (\n    <div style={{padding:\"0 16px 16px\"}}>\n      <div style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:30,letterSpacing:4,textAlign:\"center\",marginTop:20,marginBottom:16,background:`linear-gradient(90deg, ${C.purple}, ${C.pink})`,WebkitBackgroundClip:\"text\",WebkitTextFillColor:\"transparent\"}}>DISTINTE SQUADRE<\/div>\n      {activeTeam ? (\n        <div>\n          <button onClick={()=>setActiveTeam(null)} style={{background:`linear-gradient(135deg, ${C.purple}30, ${C.card2})`,border:`1px solid ${C.purple}50`,color:C.purple,padding:\"8px 16px\",borderRadius:8,cursor:\"pointer\",fontFamily:\"'Oswald',sans-serif\",fontSize:13,letterSpacing:1,marginBottom:16}}>← TORNA ALLA LISTA<\/button>\n          <div style={{background:`linear-gradient(135deg, ${C.purple}15, ${C.card})`,border:`1px solid ${C.purple}40`,borderRadius:12,padding:20}}>\n            <div style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:28,letterSpacing:3,background:`linear-gradient(90deg, ${C.purple}, ${C.pink})`,WebkitBackgroundClip:\"text\",WebkitTextFillColor:\"transparent\",marginBottom:16}}>{activeTeam}<\/div>\n            {(data.rosters[activeTeam]||[]).filter(p=>p).map((player,i)=>(\n              <div key={i} style={{display:\"flex\",alignItems:\"center\",gap:14,padding:\"11px 0\",borderBottom:`1px solid ${C.border}`}}>\n                <div style={{width:28,height:28,borderRadius:\"50%\",background:`linear-gradient(135deg, ${C.purple}, ${C.pink})`,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",fontFamily:\"'Bebas Neue',sans-serif\",fontSize:14,color:\"#fff\",flexShrink:0}}>{i+1}<\/div>\n                <span style={{fontFamily:\"'Oswald',sans-serif\",fontSize:15,color:C.text}}>{player}<\/span>\n              <\/div>\n            ))}\n            {(data.rosters[activeTeam]||[]).filter(p=>p).length===0 && <div style={{textAlign:\"center\",color:C.muted,fontFamily:\"'Oswald',sans-serif\"}}>Rosa non ancora inserita<\/div>}\n          <\/div>\n        <\/div>\n      ) : (\n        Object.entries(data.groups).map(([g,teams])=>{\n          const gc=GROUP_COLORS[g];\n          return (\n            <div key={g} style={{marginBottom:22}}>\n              <div style={{fontFamily:\"'Bebas Neue',sans-serif\",letterSpacing:4,fontSize:13,color:gc,marginBottom:10,textTransform:\"uppercase\",textShadow:`0 0 10px ${gc}`}}>● Girone {g}<\/div>\n              <div style={{display:\"grid\",gridTemplateColumns:\"1fr 1fr\",gap:10}}>\n                {teams.map(team=>(\n                  <button key={team} onClick={()=>setActiveTeam(team)} style={{background:`linear-gradient(135deg, ${gc}12, ${C.card})`,border:`1px solid ${gc}40`,borderRadius:12,padding:\"16px 12px\",cursor:\"pointer\",textAlign:\"left\"}}>\n                    <div style={{fontSize:22,marginBottom:6}}>👕<\/div>\n                    <div style={{fontFamily:\"'Oswald',sans-serif\",fontSize:13,color:C.text,marginBottom:4}}>{team}<\/div>\n                    <div style={{fontSize:11,color:gc}}>{(data.rosters[team]||[]).filter(p=>p).length} giocatori →<\/div>\n                  <\/button>\n                ))}\n              <\/div>\n            <\/div>\n          );\n        })\n      )}\n    <\/div>\n  );\n}\n\nfunction BracketPage({data}){\n  const ko=data.knockout;\n  return (\n    <div style={{padding:\"0 16px 16px\"}}>\n      <div style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:30,letterSpacing:4,textAlign:\"center\",marginTop:20,marginBottom:16,background:`linear-gradient(90deg, ${C.gold}, ${C.orange}, ${C.pink})`,WebkitBackgroundClip:\"text\",WebkitTextFillColor:\"transparent\"}}>TABELLONE<\/div>\n      <SectionTitle color={C.cyan}>⚔️ Quarti di finale<\/SectionTitle>\n      {ko.quarters.map(m=><ScoreCard key={m.id} home={m.home} away={m.away} hScore={m.homeScore} aScore={m.awayScore} played={m.played} accentColor={C.cyan}\/>)}\n      <SectionTitle color={C.pink}>🔥 Semifinali<\/SectionTitle>\n      {ko.semis.map(m=><ScoreCard key={m.id} home={m.home} away={m.away} hScore={m.homeScore} aScore={m.awayScore} played={m.played} accentColor={C.pink}\/>)}\n      <SectionTitle color={C.gold}>🏆 Finale<\/SectionTitle>\n      <div style={{position:\"relative\",padding:3,borderRadius:14,background:`linear-gradient(135deg, ${C.gold}, ${C.orange}, ${C.pink})`,boxShadow:`0 8px 40px ${C.gold}40`}}>\n        <div style={{background:C.bg,borderRadius:12}}>\n          <ScoreCard home={ko.final.home} away={ko.final.away} hScore={ko.final.homeScore} aScore={ko.final.awayScore} played={ko.final.played} accentColor={C.gold}\/>\n        <\/div>\n      <\/div>\n    <\/div>\n  );\n}\n\nconst NAV=[\n  {id:\"home\",icon:\"⚽\",label:\"Home\",color:C.cyan},\n  {id:\"groups\",icon:\"📊\",label:\"Gironi\",color:C.green},\n  {id:\"results\",icon:\"🏟️\",label:\"Risultati\",color:C.pink},\n  {id:\"scorers\",icon:\"🥅\",label:\"Marcatori\",color:C.gold},\n  {id:\"rosters\",icon:\"👥\",label:\"Distinte\",color:C.purple},\n  {id:\"bracket\",icon:\"🏆\",label:\"Tabellone\",color:C.orange},\n];\n\nexport default function App(){\n  const [page,setPage]=useState(\"home\");\n  const [data,setData]=useState(DEFAULT_DATA);\n  const [loading,setLoading]=useState(true);\n  const [adminOpen,setAdminOpen]=useState(false);\n  const [adminPwInput,setAdminPwInput]=useState(\"\");\n  const [showPwPrompt,setShowPwPrompt]=useState(false);\n  const [tapCount,setTapCount]=useState(0);\n  const [tapTimer,setTapTimer]=useState(null);\n\n  useEffect(()=>{\n    const unsub = onSnapshot(doc(db,\"tournament\",\"data\"),(snap)=>{\n      if(snap.exists()){\n        const d = snap.data();\n        \/\/ merge con DEFAULT_DATA per campi mancanti (retrocompatibilità)\n        setData({...DEFAULT_DATA,...d, events: d.events||[]});\n      }\n      setLoading(false);\n    },(err)=>{\n      console.error(\"Firebase error:\",err);\n      setLoading(false);\n    });\n    return ()=>unsub();\n  },[]);\n\n  const handleSave = async (newData) => {\n    await setDoc(doc(db,\"tournament\",\"data\"), newData);\n    setData(newData);\n  };\n\n  const handleLogoTap = () => {\n    const newCount = tapCount + 1;\n    setTapCount(newCount);\n    if(tapTimer) clearTimeout(tapTimer);\n    if(newCount >= 5){ setShowPwPrompt(true); setTapCount(0); return; }\n    const t = setTimeout(()=>setTapCount(0), 2000);\n    setTapTimer(t);\n  };\n\n  const handleAdminLogin = () => {\n    if(adminPwInput === ADMIN_PASSWORD){ setAdminOpen(true); setShowPwPrompt(false); setAdminPwInput(\"\"); }\n    else alert(\"Password errata\");\n  };\n\n  const activeColor=NAV.find(n=>n.id===page)?.color||C.gold;\n\n  if(loading) return (\n    <div style={{background:C.bg,height:\"100vh\",display:\"flex\",flexDirection:\"column\",alignItems:\"center\",justifyContent:\"center\",gap:16}}>\n      <div style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:48,letterSpacing:5,background:`linear-gradient(135deg, #fff, ${C.cyan}, ${C.gold})`,WebkitBackgroundClip:\"text\",WebkitTextFillColor:\"transparent\"}}>AZZURRA<\/div>\n      <div style={{color:C.muted,fontFamily:\"'Oswald',sans-serif\",letterSpacing:3,fontSize:13}}>CARICAMENTO...<\/div>\n    <\/div>\n  );\n\n  const pages={\n    home:<HomePage data={data}\/>,\n    groups:<GroupsPage data={data}\/>,\n    results:<ResultsPage data={data}\/>,\n    scorers:<ScorersPage data={data}\/>,\n    rosters:<RostersPage data={data}\/>,\n    bracket:<BracketPage data={data}\/>\n  };\n\n  return (\n    <>\n      <style>{`\n        @import url('https:\/\/fonts.googleapis.com\/css2?family=Bebas+Neue&family=Oswald:wght@300;400;500;600;700&display=swap');\n        *{margin:0;padding:0;box-sizing:border-box;}\n        body{background:${C.bg};color:${C.text};font-family:'Oswald',sans-serif;}\n        ::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-thumb{background:${C.border};border-radius:4px;}\n        button{-webkit-tap-highlight-color:transparent;}\n        input[type=\"date\"]::-webkit-calendar-picker-indicator{filter:invert(1);opacity:0.6;}\n      `}<\/style>\n\n      {adminOpen && <AdminPanel data={data} onSave={handleSave} onClose={()=>setAdminOpen(false)}\/>}\n\n      {showPwPrompt && (\n        <div style={{position:\"fixed\",inset:0,background:\"rgba(0,0,0,0.9)\",zIndex:99,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",padding:20}}>\n          <div style={{background:C.card,border:`1px solid ${C.gold}50`,borderRadius:16,padding:24,width:\"100%\",maxWidth:320}}>\n            <div style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:24,color:C.gold,marginBottom:16,textAlign:\"center\"}}>🔐 ADMIN ACCESS<\/div>\n            <input type=\"password\" value={adminPwInput} onChange={e=>setAdminPwInput(e.target.value)} onKeyDown={e=>e.key===\"Enter\"&&handleAdminLogin()} placeholder=\"Password\" style={{background:C.card2,border:`1px solid ${C.border}`,color:C.text,padding:\"12px 14px\",borderRadius:8,fontFamily:\"'Oswald',sans-serif\",fontSize:16,width:\"100%\",marginBottom:12}}\/>\n            <div style={{display:\"flex\",gap:8}}>\n              <button onClick={()=>{setShowPwPrompt(false);setAdminPwInput(\"\");}} style={{flex:1,background:C.card2,border:`1px solid ${C.border}`,color:C.muted,padding:\"10px\",borderRadius:8,cursor:\"pointer\",fontFamily:\"'Oswald',sans-serif\",fontSize:14}}>Annulla<\/button>\n              <button onClick={handleAdminLogin} style={{flex:2,background:`linear-gradient(135deg, ${C.gold}, ${C.orange})`,border:\"none\",color:\"#000\",padding:\"10px\",borderRadius:8,cursor:\"pointer\",fontFamily:\"'Bebas Neue',sans-serif\",fontSize:18,letterSpacing:1}}>ENTRA<\/button>\n            <\/div>\n          <\/div>\n        <\/div>\n      )}\n\n      <div style={{maxWidth:480,margin:\"0 auto\",minHeight:\"100vh\",background:C.bg}}>\n        <div style={{position:\"sticky\",top:0,zIndex:50,background:`rgba(8,9,14,0.94)`,backdropFilter:\"blur(16px)\",borderBottom:`1px solid ${activeColor}30`,padding:\"12px 18px\",display:\"flex\",alignItems:\"center\",justifyContent:\"space-between\",boxShadow:`0 2px 20px ${activeColor}15`}}>\n          <div onClick={handleLogoTap} style={{fontFamily:\"'Bebas Neue',sans-serif\",fontSize:22,letterSpacing:4,cursor:\"pointer\",userSelect:\"none\"}}>\n            <span style={{background:`linear-gradient(90deg, #fff, ${C.cyan})`,WebkitBackgroundClip:\"text\",WebkitTextFillColor:\"transparent\"}}>AZZURRA <\/span>\n            <span style={{background:`linear-gradient(90deg, ${C.gold}, ${C.orange})`,WebkitBackgroundClip:\"text\",WebkitTextFillColor:\"transparent\"}}>CC<\/span>\n          <\/div>\n          <GlowBadge color={C.green}>🟢 LIVE<\/GlowBadge>\n        <\/div>\n\n        <div style={{paddingBottom:80}}>{pages[page]}<\/div>\n\n        <div style={{position:\"fixed\",bottom:0,left:\"50%\",transform:\"translateX(-50%)\",width:\"100%\",maxWidth:480,background:`rgba(8,9,14,0.97)`,backdropFilter:\"blur(16px)\",borderTop:`1px solid ${activeColor}30`,display:\"flex\",padding:\"8px 2px 14px\"}}>\n          {NAV.map(item=>{\n            const isActive=page===item.id;\n            return (\n              <button key={item.id} onClick={()=>setPage(item.id)} style={{flex:1,display:\"flex\",flexDirection:\"column\",alignItems:\"center\",gap:3,background:\"none\",border:\"none\",cursor:\"pointer\",padding:\"4px 0\"}}>\n                <div style={{width:36,height:36,borderRadius:10,background:isActive?`linear-gradient(135deg, ${item.color}30, ${item.color}15)`:\"transparent\",border:isActive?`1px solid ${item.color}60`:\"1px solid transparent\",display:\"flex\",alignItems:\"center\",justifyContent:\"center\",fontSize:18,boxShadow:isActive?`0 0 16px ${item.color}40`:\"none\"}}>{item.icon}<\/div>\n                <span style={{fontFamily:\"'Oswald',sans-serif\",fontSize:9,letterSpacing:1,color:isActive?item.color:C.muted,textTransform:\"uppercase\",textShadow:isActive?`0 0 8px ${item.color}`:\"none\"}}>{item.label}<\/span>\n              <\/button>\n            );\n          })}\n        <\/div>\n      <\/div>\n    <\/>\n  );\n}\n",
-  "stderr" : ""
+/* eslint-disable */
+import { useState, useEffect } from "react";
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBZ1f5mrIqWlwIUXgG85NDSof7rZoxSst8",
+  authDomain: "azzurra-champions-cup.firebaseapp.com",
+  projectId: "azzurra-champions-cup",
+  storageBucket: "azzurra-champions-cup.firebasestorage.app",
+  messagingSenderId: "467270395374",
+  appId: "1:467270395374:web:4abe7a67dd989ae1c85aff",
+  measurementId: "G-WYJNFKS8HT"
+};
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
+const ADMIN_PASSWORD = "Azzurra2025!Cup";
+
+const C = {
+  gold:"#FFD700", cyan:"#00E5FF", green:"#00FF87", pink:"#FF2D78",
+  purple:"#9B5DE5", orange:"#FF6B00", bg:"#08090E", card:"#10131C",
+  card2:"#161B2C", border:"#1E2540", muted:"#5A6480", text:"#E8EDF8",
+};
+const GROUP_COLORS = { A:C.cyan, B:C.green, C:C.pink, D:C.purple };
+
+const DEFAULT_GROUPS = {
+  A:["Squadra A1","Squadra A2","Squadra A3","Squadra A4"],
+  B:["Squadra B1","Squadra B2","Squadra B3","Squadra B4"],
+  C:["Squadra C1","Squadra C2","Squadra C3","Squadra C4"],
+  D:["Squadra D1","Squadra D2","Squadra D3","Squadra D4"]
+};
+
+function makeMatches(groups) {
+  const all = {};
+  Object.entries(groups).forEach(([g, teams]) => {
+    const matches = [];
+    for (let i = 0; i < teams.length; i++)
+      for (let j = i+1; j < teams.length; j++)
+        matches.push({ id:`${g}${matches.length+1}`, home:teams[i], away:teams[j], homeScore:null, awayScore:null, scorers:{}, played:false });
+    all[g] = matches;
+  });
+  return all;
+}
+
+const DEFAULT_DATA = {
+  groups: DEFAULT_GROUPS,
+  rosters: Object.fromEntries(Object.values(DEFAULT_GROUPS).flat().map(t => [t, []])),
+  matches: makeMatches(DEFAULT_GROUPS),
+  knockout: {
+    quarters: Array(4).fill(null).map((_,i)=>({id:`Q${i+1}`,home:"TBD",away:"TBD",homeScore:null,awayScore:null,played:false})),
+    semis: Array(2).fill(null).map((_,i)=>({id:`S${i+1}`,home:"TBD",away:"TBD",homeScore:null,awayScore:null,played:false})),
+    final: {id:"F1",home:"TBD",away:"TBD",homeScore:null,awayScore:null,played:false}
+  },
+  sponsors: [],
+  events: []
+};
+
+// ─── UTILS ────────────────────────────────────────────────────────────────────
+function computeStandings(groupKey, groups, matches) {
+  const teams = groups[groupKey] || [];
+  const groupMatches = matches[groupKey] || [];
+  const t = {};
+  teams.forEach(n => { t[n]={team:n,played:0,won:0,drawn:0,lost:0,gf:0,ga:0,gd:0,pts:0}; });
+  groupMatches.filter(m=>m.played).forEach(m => {
+    const h=t[m.home], a=t[m.away];
+    if(!h||!a) return;
+    h.played++; a.played++;
+    h.gf+=m.homeScore; h.ga+=m.awayScore;
+    a.gf+=m.awayScore; a.ga+=m.homeScore;
+    if(m.homeScore>m.awayScore){h.won++;h.pts+=3;a.lost++;}
+    else if(m.homeScore<m.awayScore){a.won++;a.pts+=3;h.lost++;}
+    else{h.drawn++;a.drawn++;h.pts++;a.pts++;}
+    h.gd=h.gf-h.ga; a.gd=a.gf-a.ga;
+  });
+  return Object.values(t).sort((a,b)=>b.pts-a.pts||b.gd-a.gd||b.gf-a.gf);
+}
+
+function computeScorers(matches) {
+  const tally = {};
+  Object.values(matches).forEach(group => {
+    group.filter(m=>m.played).forEach(m => {
+      Object.values(m.scorers||{}).forEach(players => {
+        players.forEach(p => { if(p) tally[p]=(tally[p]||0)+1; });
+      });
+    });
+  });
+  return Object.entries(tally).map(([name,goals])=>({name,goals})).sort((a,b)=>b.goals-a.goals);
+}
+
+function formatEventDate(dateStr) {
+  if(!dateStr) return "";
+  try {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString("it-IT", { weekday:"short", day:"numeric", month:"short" });
+  } catch { return dateStr; }
+}
+
+// ─── SHARED COMPONENTS ────────────────────────────────────────────────────────
+function GlowBadge({children,color=C.gold}){
+  return <span style={{background:color+"28",border:`1px solid ${color}60`,color,padding:"3px 10px",borderRadius:20,fontSize:10,fontFamily:"'Oswald',sans-serif",letterSpacing:2,textTransform:"uppercase",boxShadow:`0 0 10px ${color}40`}}>{children}</span>;
+}
+
+function SectionTitle({children,color=C.gold}){
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:10,margin:"22px 0 14px"}}>
+      <div style={{flex:1,height:1,background:`linear-gradient(90deg, ${color}80, transparent)`}}/>
+      <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:14,letterSpacing:4,color,whiteSpace:"nowrap"}}>{children}</span>
+      <div style={{flex:1,height:1,background:`linear-gradient(270deg, ${color}80, transparent)`}}/>
+    </div>
+  );
+}
+
+function ScoreCard({home,away,hScore,aScore,played,accentColor=C.gold}){
+  return (
+    <div style={{background:C.card,border:`1px solid ${played?accentColor+"50":C.border}`,borderRadius:12,padding:"14px 16px",marginBottom:10,position:"relative",overflow:"hidden"}}>
+      <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:played?`linear-gradient(90deg, ${accentColor}, ${C.cyan})`:C.border}}/>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <span style={{flex:1,fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.text,textAlign:"right",lineHeight:1.2}}>{home}</span>
+        <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+          <div style={{background:played?`linear-gradient(135deg, ${accentColor}, ${C.orange})`:C.card2,color:played?"#000":C.muted,fontFamily:"'Bebas Neue',sans-serif",fontSize:26,minWidth:38,textAlign:"center",borderRadius:8,padding:"4px 6px",boxShadow:played?`0 0 16px ${accentColor}60`:"none"}}>{played?hScore:"-"}</div>
+          <span style={{color:C.muted,fontSize:11,fontFamily:"'Oswald',sans-serif"}}>VS</span>
+          <div style={{background:played?`linear-gradient(135deg, ${accentColor}, ${C.orange})`:C.card2,color:played?"#000":C.muted,fontFamily:"'Bebas Neue',sans-serif",fontSize:26,minWidth:38,textAlign:"center",borderRadius:8,padding:"4px 6px",boxShadow:played?`0 0 16px ${accentColor}60`:"none"}}>{played?aScore:"-"}</div>
+        </div>
+        <span style={{flex:1,fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.text,lineHeight:1.2}}>{away}</span>
+      </div>
+      {!played&&<div style={{textAlign:"center",marginTop:8}}><GlowBadge color={C.muted}>In programma</GlowBadge></div>}
+    </div>
+  );
+}
+
+function GroupTab({label,active,color,onClick}){
+  return <button onClick={onClick} style={{flex:1,padding:"10px 0",borderRadius:10,border:"none",cursor:"pointer",background:active?`linear-gradient(135deg, ${color}, ${color}88)`:C.card2,color:active?"#000":C.muted,fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:2,boxShadow:active?`0 4px 20px ${color}60`:"none",outline:active?"none":`1px solid ${C.border}`}}>Girone {label}</button>;
+}
+
+// ─── ADMIN PANEL ──────────────────────────────────────────────────────────────
+function AdminPanel({data, onSave, onClose}){
+  const [tab, setTab] = useState("teams");
+  const [localData, setLocalData] = useState(JSON.parse(JSON.stringify(data)));
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    await onSave(localData);
+    setSaving(false);
+    alert("Salvato!");
+  };
+
+  // BUG FIX: deep clone ogni volta per evitare mutazioni di stato
+  const updateMatchScore = (g, idx, field, val) => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    newData.matches[g][idx][field] = val === "" ? null : parseInt(val);
+    if(newData.matches[g][idx].homeScore !== null && newData.matches[g][idx].awayScore !== null)
+      newData.matches[g][idx].played = true;
+    else
+      newData.matches[g][idx].played = false;
+    setLocalData(newData);
+  };
+
+  const updateKnockoutScore = (round, idx, field, val) => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    if(round === "final"){
+      newData.knockout.final[field] = val === "" ? null : parseInt(val);
+      newData.knockout.final.played = newData.knockout.final.homeScore !== null && newData.knockout.final.awayScore !== null;
+    } else {
+      newData.knockout[round][idx][field] = val === "" ? null : parseInt(val);
+      newData.knockout[round][idx].played = newData.knockout[round][idx].homeScore !== null && newData.knockout[round][idx].awayScore !== null;
+    }
+    setLocalData(newData);
+  };
+
+  const updateKnockoutTeam = (round, idx, field, val) => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    if(round === "final") newData.knockout.final[field] = val;
+    else newData.knockout[round][idx][field] = val;
+    setLocalData(newData);
+  };
+
+  const updateTeamName = (g, tIdx, val) => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    const oldName = newData.groups[g][tIdx];
+    newData.groups[g][tIdx] = val;
+    newData.matches[g] = newData.matches[g].map(m => ({
+      ...m,
+      home: m.home === oldName ? val : m.home,
+      away: m.away === oldName ? val : m.away,
+      scorers: Object.fromEntries(Object.entries(m.scorers).map(([k,v]) => [k===oldName?val:k, v]))
+    }));
+    if(newData.rosters[oldName]){ newData.rosters[val] = newData.rosters[oldName]; delete newData.rosters[oldName]; }
+    setLocalData(newData);
+  };
+
+  const updateRoster = (team, playerIdx, val) => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    if(!newData.rosters[team]) newData.rosters[team] = [];
+    newData.rosters[team][playerIdx] = val;
+    setLocalData(newData);
+  };
+
+  const addPlayer = (team) => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    if(!newData.rosters[team]) newData.rosters[team] = [];
+    newData.rosters[team].push("");
+    setLocalData(newData);
+  };
+
+  const removePlayer = (team, idx) => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    newData.rosters[team].splice(idx, 1);
+    setLocalData(newData);
+  };
+
+  const addScorer = (g, mIdx, team) => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    if(!newData.matches[g][mIdx].scorers[team]) newData.matches[g][mIdx].scorers[team] = [];
+    newData.matches[g][mIdx].scorers[team].push("");
+    setLocalData(newData);
+  };
+
+  const updateScorer = (g, mIdx, team, sIdx, val) => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    newData.matches[g][mIdx].scorers[team][sIdx] = val;
+    setLocalData(newData);
+  };
+
+  const removeScorer = (g, mIdx, team, sIdx) => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    newData.matches[g][mIdx].scorers[team].splice(sIdx, 1);
+    setLocalData(newData);
+  };
+
+  // EVENTI
+  const addEvent = () => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    if(!newData.events) newData.events = [];
+    newData.events.push({ id: Date.now().toString(), date:"", title:"", description:"", color: C.cyan });
+    setLocalData(newData);
+  };
+
+  const updateEvent = (idx, field, val) => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    newData.events[idx][field] = val;
+    setLocalData(newData);
+  };
+
+  const removeEvent = (idx) => {
+    const newData = JSON.parse(JSON.stringify(localData));
+    newData.events.splice(idx, 1);
+    setLocalData(newData);
+  };
+
+  const inputStyle = {background:C.card2,border:`1px solid ${C.border}`,color:C.text,padding:"8px 10px",borderRadius:8,fontFamily:"'Oswald',sans-serif",fontSize:14,width:"100%"};
+  const btnStyle = (color) => ({background:`linear-gradient(135deg, ${color}, ${color}88)`,border:"none",color:"#000",padding:"10px 16px",borderRadius:8,cursor:"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:1});
+
+  const TABS = [
+    {id:"teams",label:"Squadre"},
+    {id:"rosters",label:"Distinte"},
+    {id:"results",label:"Risultati"},
+    {id:"knockout",label:"Eliminazione"},
+    {id:"events",label:"📅 Calendario"}
+  ];
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.95)",zIndex:100,overflowY:"auto"}}>
+      <div style={{maxWidth:480,margin:"0 auto",padding:"16px 16px 100px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:C.gold,letterSpacing:3}}>🔐 ADMIN</div>
+          <button onClick={onClose} style={{background:C.card2,border:`1px solid ${C.border}`,color:C.muted,padding:"8px 14px",borderRadius:8,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:13}}>✕ Chiudi</button>
+        </div>
+
+        <div style={{display:"flex",gap:6,marginBottom:20,flexWrap:"wrap"}}>
+          {TABS.map(t=>(
+            <button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"8px 14px",borderRadius:8,border:"none",cursor:"pointer",background:tab===t.id?C.gold:C.card2,color:tab===t.id?"#000":C.muted,fontFamily:"'Oswald',sans-serif",fontSize:12,letterSpacing:1}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* SQUADRE */}
+        {tab==="teams" && (
+          <div>
+            <SectionTitle color={C.cyan}>Nomi Squadre</SectionTitle>
+            {Object.entries(localData.groups).map(([g,teams])=>(
+              <div key={g} style={{marginBottom:20}}>
+                <div style={{color:GROUP_COLORS[g],fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:3,marginBottom:8}}>GIRONE {g}</div>
+                {teams.map((team,tIdx)=>(
+                  <input key={tIdx} value={team} onChange={e=>updateTeamName(g,tIdx,e.target.value)} style={{...inputStyle,marginBottom:8}} placeholder={`Squadra ${g}${tIdx+1}`}/>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* DISTINTE */}
+        {tab==="rosters" && (
+          <div>
+            <SectionTitle color={C.purple}>Rosa Squadre</SectionTitle>
+            {Object.entries(localData.groups).map(([g,teams])=>
+              teams.map(team=>(
+                <div key={team} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:14,marginBottom:12}}>
+                  <div style={{color:GROUP_COLORS[g],fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:2,marginBottom:10}}>{team}</div>
+                  {(localData.rosters[team]||[]).map((player,pIdx)=>(
+                    <div key={pIdx} style={{display:"flex",gap:8,marginBottom:8}}>
+                      <input value={player} onChange={e=>updateRoster(team,pIdx,e.target.value)} style={{...inputStyle,flex:1}} placeholder="Nome giocatore"/>
+                      <button onClick={()=>removePlayer(team,pIdx)} style={{background:"#ff2d7830",border:"1px solid #ff2d7860",color:C.pink,padding:"8px 12px",borderRadius:8,cursor:"pointer",fontSize:14}}>✕</button>
+                    </div>
+                  ))}
+                  <button onClick={()=>addPlayer(team)} style={{background:`${GROUP_COLORS[g]}20`,border:`1px solid ${GROUP_COLORS[g]}50`,color:GROUP_COLORS[g],padding:"8px 16px",borderRadius:8,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:13,width:"100%",marginTop:4}}>+ Aggiungi giocatore</button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* RISULTATI GIRONI */}
+        {tab==="results" && (
+          <div>
+            <SectionTitle color={C.pink}>Risultati Gironi</SectionTitle>
+            {Object.entries(localData.matches).map(([g,gMatches])=>(
+              <div key={g} style={{marginBottom:20}}>
+                <div style={{color:GROUP_COLORS[g],fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:3,marginBottom:8}}>GIRONE {g}</div>
+                {gMatches.map((m,mIdx)=>(
+                  <div key={m.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginBottom:10}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                      <span style={{flex:1,fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.text,textAlign:"right"}}>{m.home}</span>
+                      <input type="number" min="0" value={m.homeScore??""} onChange={e=>updateMatchScore(g,mIdx,"homeScore",e.target.value)} style={{...inputStyle,width:50,textAlign:"center",padding:"6px 4px"}}/>
+                      <span style={{color:C.muted,fontSize:11}}>-</span>
+                      <input type="number" min="0" value={m.awayScore??""} onChange={e=>updateMatchScore(g,mIdx,"awayScore",e.target.value)} style={{...inputStyle,width:50,textAlign:"center",padding:"6px 4px"}}/>
+                      <span style={{flex:1,fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.text}}>{m.away}</span>
+                    </div>
+                    {m.played && (
+                      <div>
+                        <div style={{fontSize:11,color:C.muted,marginBottom:6,fontFamily:"'Oswald',sans-serif",letterSpacing:1}}>MARCATORI</div>
+                        {[m.home,m.away].map(team=>(
+                          <div key={team} style={{marginBottom:8}}>
+                            <div style={{fontSize:11,color:GROUP_COLORS[g],fontFamily:"'Oswald',sans-serif",marginBottom:4}}>{team}</div>
+                            {(m.scorers[team]||[]).map((s,sIdx)=>(
+                              <div key={sIdx} style={{display:"flex",gap:6,marginBottom:4}}>
+                                <input value={s} onChange={e=>updateScorer(g,mIdx,team,sIdx,e.target.value)} style={{...inputStyle,flex:1,padding:"5px 8px"}} placeholder="Nome marcatore"/>
+                                <button onClick={()=>removeScorer(g,mIdx,team,sIdx)} style={{background:"#ff2d7820",border:"1px solid #ff2d7840",color:C.pink,padding:"5px 10px",borderRadius:6,cursor:"pointer"}}>✕</button>
+                              </div>
+                            ))}
+                            <button onClick={()=>addScorer(g,mIdx,team)} style={{background:`${GROUP_COLORS[g]}15`,border:`1px solid ${GROUP_COLORS[g]}40`,color:GROUP_COLORS[g],padding:"5px 12px",borderRadius:6,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:11,width:"100%"}}>+ Gol {team}</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ELIMINAZIONE */}
+        {tab==="knockout" && (
+          <div>
+            <SectionTitle color={C.gold}>Fase ad Eliminazione</SectionTitle>
+            {[{label:"Quarti di Finale",key:"quarters"},{label:"Semifinali",key:"semis"}].map(({label,key})=>(
+              <div key={key} style={{marginBottom:20}}>
+                <div style={{color:C.gold,fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:3,marginBottom:8}}>{label}</div>
+                {localData.knockout[key].map((m,idx)=>(
+                  <div key={m.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginBottom:8}}>
+                    <div style={{display:"flex",gap:8,marginBottom:8}}>
+                      <input value={m.home} onChange={e=>updateKnockoutTeam(key,idx,"home",e.target.value)} style={{...inputStyle,flex:1}} placeholder="Squadra casa"/>
+                      <input value={m.away} onChange={e=>updateKnockoutTeam(key,idx,"away",e.target.value)} style={{...inputStyle,flex:1}} placeholder="Squadra ospite"/>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <input type="number" min="0" value={m.homeScore??""} onChange={e=>updateKnockoutScore(key,idx,"homeScore",e.target.value)} style={{...inputStyle,width:60,textAlign:"center"}}/>
+                      <span style={{color:C.muted}}>-</span>
+                      <input type="number" min="0" value={m.awayScore??""} onChange={e=>updateKnockoutScore(key,idx,"awayScore",e.target.value)} style={{...inputStyle,width:60,textAlign:"center"}}/>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <div style={{color:C.gold,fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:3,marginBottom:8}}>FINALE</div>
+            <div style={{background:C.card,border:`1px solid ${C.gold}50`,borderRadius:10,padding:12}}>
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <input value={localData.knockout.final.home} onChange={e=>updateKnockoutTeam("final",0,"home",e.target.value)} style={{...inputStyle,flex:1}} placeholder="Squadra casa"/>
+                <input value={localData.knockout.final.away} onChange={e=>updateKnockoutTeam("final",0,"away",e.target.value)} style={{...inputStyle,flex:1}} placeholder="Squadra ospite"/>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <input type="number" min="0" value={localData.knockout.final.homeScore??""} onChange={e=>updateKnockoutScore("final",0,"homeScore",e.target.value)} style={{...inputStyle,width:60,textAlign:"center"}}/>
+                <span style={{color:C.muted}}>-</span>
+                <input type="number" min="0" value={localData.knockout.final.awayScore??""} onChange={e=>updateKnockoutScore("final",0,"awayScore",e.target.value)} style={{...inputStyle,width:60,textAlign:"center"}}/>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* CALENDARIO EVENTI */}
+        {tab==="events" && (
+          <div>
+            <SectionTitle color={C.cyan}>📅 Calendario Eventi</SectionTitle>
+            <div style={{fontSize:12,color:C.muted,marginBottom:16,fontFamily:"'Oswald',sans-serif"}}>
+              Aggiungi eventi che appariranno nella Home (partite, cerimonie, premi...)
+            </div>
+            {(localData.events||[]).map((ev,idx)=>(
+              <div key={ev.id||idx} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:14,marginBottom:12}}>
+                <div style={{display:"flex",gap:8,marginBottom:8}}>
+                  <input
+                    type="date"
+                    value={ev.date}
+                    onChange={e=>updateEvent(idx,"date",e.target.value)}
+                    style={{...inputStyle,flex:1,colorScheme:"dark"}}
+                  />
+                  <select value={ev.color} onChange={e=>updateEvent(idx,"color",e.target.value)}
+                    style={{...inputStyle,width:50,padding:"8px 4px",cursor:"pointer"}}>
+                    <option value={C.cyan}>🔵</option>
+                    <option value={C.gold}>🟡</option>
+                    <option value={C.green}>🟢</option>
+                    <option value={C.pink}>🔴</option>
+                    <option value={C.purple}>🟣</option>
+                    <option value={C.orange}>🟠</option>
+                  </select>
+                  <button onClick={()=>removeEvent(idx)} style={{background:"#ff2d7830",border:"1px solid #ff2d7860",color:C.pink,padding:"8px 12px",borderRadius:8,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
+                </div>
+                <input
+                  value={ev.title}
+                  onChange={e=>updateEvent(idx,"title",e.target.value)}
+                  placeholder="Titolo evento (es: Girone A - Fase 1)"
+                  style={{...inputStyle,marginBottom:8}}
+                />
+                <input
+                  value={ev.description||""}
+                  onChange={e=>updateEvent(idx,"description",e.target.value)}
+                  placeholder="Descrizione (opzionale, es: Ore 18:00 - Campo A)"
+                  style={{...inputStyle}}
+                />
+              </div>
+            ))}
+            <button onClick={addEvent} style={{background:`${C.cyan}20`,border:`1px solid ${C.cyan}50`,color:C.cyan,padding:"12px 16px",borderRadius:10,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:14,width:"100%",marginTop:4}}>
+              + Aggiungi Evento
+            </button>
+          </div>
+        )}
+
+        <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,padding:"12px 16px",background:C.bg,borderTop:`1px solid ${C.border}`}}>
+          <button onClick={save} disabled={saving} style={{...btnStyle(C.gold),width:"100%",fontSize:18,padding:"14px",opacity:saving?0.7:1}}>
+            {saving?"Salvataggio...":"💾 SALVA TUTTO"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── PAGES ────────────────────────────────────────────────────────────────────
+function EventsCalendar({events}){
+  if(!events||events.length===0) return null;
+  const sorted = [...events].sort((a,b)=>a.date>b.date?1:-1);
+  const today = new Date().toISOString().split("T")[0];
+
+  return (
+    <div style={{padding:"0 16px"}}>
+      <SectionTitle color={C.cyan}>📅 Programma</SectionTitle>
+      {sorted.map((ev,i)=>{
+        const isPast = ev.date && ev.date < today;
+        const isToday = ev.date === today;
+        const color = ev.color || C.cyan;
+        return (
+          <div key={ev.id||i} style={{
+            display:"flex",gap:14,alignItems:"stretch",marginBottom:10,
+            opacity: isPast ? 0.55 : 1
+          }}>
+            {/* colonna data */}
+            <div style={{
+              display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+              minWidth:52,background:isToday?`linear-gradient(135deg,${color},${color}88)`:C.card2,
+              borderRadius:10,padding:"8px 4px",
+              border:`1px solid ${isToday?color:C.border}`,
+              boxShadow:isToday?`0 0 16px ${color}60`:"none"
+            }}>
+              {ev.date ? (
+                <>
+                  <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:isToday?"#000":color,lineHeight:1}}>
+                    {new Date(ev.date+"T00:00:00").getDate()}
+                  </span>
+                  <span style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:isToday?"#000":C.muted,letterSpacing:1,textTransform:"uppercase"}}>
+                    {new Date(ev.date+"T00:00:00").toLocaleDateString("it-IT",{month:"short"})}
+                  </span>
+                </>
+              ) : (
+                <span style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:C.muted}}>TBD</span>
+              )}
+            </div>
+            {/* contenuto */}
+            <div style={{
+              flex:1,background:C.card,border:`1px solid ${isToday?color+"50":C.border}`,
+              borderRadius:10,padding:"10px 14px",
+              borderLeft:`3px solid ${color}`,
+              position:"relative",overflow:"hidden"
+            }}>
+              {isToday && <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${color},transparent)`}}/>}
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.text,fontWeight:600,flex:1}}>{ev.title||"Evento"}</span>
+                {isToday && <GlowBadge color={color}>OGGI</GlowBadge>}
+                {isPast && <span style={{fontSize:10,color:C.muted,fontFamily:"'Oswald',sans-serif",letterSpacing:1}}>CONCLUSO</span>}
+              </div>
+              {ev.description && (
+                <div style={{fontSize:12,color:C.muted,marginTop:4,fontFamily:"'Oswald',sans-serif"}}>{ev.description}</div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function HomePage({data}){
+  const scorers = computeScorers(data.matches).slice(0,3);
+  const totalGoals = Object.values(data.matches).flat().filter(m=>m.played).reduce((a,m)=>a+m.homeScore+m.awayScore,0);
+  const playedCount = Object.values(data.matches).flat().filter(m=>m.played).length;
+
+  return (
+    <div>
+      {/* Hero */}
+      <div style={{textAlign:"center",padding:"44px 20px 32px",background:`radial-gradient(ellipse at 50% -10%, ${C.cyan}18 0%, ${C.purple}10 40%, transparent 70%)`,borderBottom:`1px solid ${C.border}`,position:"relative",overflow:"hidden"}}>
+        <div style={{fontSize:11,letterSpacing:5,color:C.cyan,fontFamily:"'Oswald',sans-serif",marginBottom:6,textTransform:"uppercase"}}>⚽ Stagione 2026</div>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:58,lineHeight:1,letterSpacing:5,background:`linear-gradient(135deg, #fff 0%, ${C.cyan} 50%, ${C.gold} 100%)`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>AZZURRA</div>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:6,background:`linear-gradient(90deg, ${C.gold}, ${C.orange})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>CHAMPIONS CUP</div>
+        <div style={{marginTop:16,display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
+          <GlowBadge color={C.cyan}>16 squadre</GlowBadge>
+          <GlowBadge color={C.gold}>3 giorni</GlowBadge>
+          <GlowBadge color={C.green}>31 partite</GlowBadge>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div style={{padding:"20px 16px 0"}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+          {[{label:"Partite giocate",value:playedCount,color:C.cyan},{label:"Goal totali",value:totalGoals,color:C.green},{label:"Marcatori",value:computeScorers(data.matches).length,color:C.pink}].map(s=>(
+            <div key={s.label} style={{background:`linear-gradient(135deg, ${s.color}18, ${C.card})`,border:`1px solid ${s.color}40`,borderRadius:12,padding:"16px 8px",textAlign:"center"}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:38,color:s.color,lineHeight:1,textShadow:`0 0 20px ${s.color}`}}>{s.value}</div>
+              <div style={{fontSize:9,color:C.muted,marginTop:5,fontFamily:"'Oswald',sans-serif",letterSpacing:1,textTransform:"uppercase",lineHeight:1.3}}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Calendario */}
+      <EventsCalendar events={data.events} />
+
+      {/* Top 3 Marcatori */}
+      {scorers.length > 0 && (
+        <div style={{padding:"0 16px"}}>
+          <SectionTitle color={C.gold}>🥅 Top Marcatori</SectionTitle>
+          {scorers.map((s,i)=>{
+            const colors=[C.gold,"#C0C0C0","#CD7F32"];
+            const medals=["🥇","🥈","🥉"];
+            return (
+              <div key={s.name} style={{display:"flex",alignItems:"center",gap:12,background:i===0?`linear-gradient(135deg, ${C.gold}18, ${C.card})`:C.card,border:`1px solid ${i===0?C.gold+"50":C.border}`,borderRadius:12,padding:"12px 16px",marginBottom:8}}>
+                <span style={{fontSize:24,minWidth:32}}>{medals[i]}</span>
+                <span style={{flex:1,fontFamily:"'Oswald',sans-serif",fontSize:16,color:C.text}}>{s.name}</span>
+                <div style={{display:"flex",alignItems:"center",gap:4}}>
+                  <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:colors[i],textShadow:`0 0 12px ${colors[i]}`}}>{s.goals}</span>
+                  <span style={{fontSize:16}}>⚽</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Sponsor */}
+      {data.sponsors && data.sponsors.length > 0 && (
+        <div style={{padding:"0 16px 16px"}}>
+          <SectionTitle color={C.orange}>🤝 Sponsor</SectionTitle>
+          <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+            {data.sponsors.map((s,i)=>(
+              <div key={i} style={{background:`linear-gradient(135deg, ${C.orange}18, ${C.card})`,border:`1px solid ${C.orange}40`,borderRadius:10,padding:"10px 16px",fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.text}}>{s}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{height:16}}/>
+    </div>
+  );
+}
+
+function GroupsPage({data}){
+  const [active,setActive]=useState("A");
+  const color=GROUP_COLORS[active];
+  const standings=computeStandings(active,data.groups,data.matches);
+  return (
+    <div style={{padding:"0 16px 16px"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:4,textAlign:"center",marginTop:20,marginBottom:16,background:`linear-gradient(90deg, ${C.cyan}, ${C.gold})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>CLASSIFICHE GIRONI</div>
+      <div style={{display:"flex",gap:8,marginBottom:20}}>
+        {["A","B","C","D"].map(g=><GroupTab key={g} label={g} active={active===g} color={GROUP_COLORS[g]} onClick={()=>setActive(g)}/>)}
+      </div>
+      <div style={{background:C.card,border:`1px solid ${color}40`,borderRadius:12,overflow:"hidden",boxShadow:`0 4px 30px ${color}20`}}>
+        <div style={{height:3,background:`linear-gradient(90deg, ${color}, ${C.cyan})`}}/>
+        <div style={{display:"grid",gridTemplateColumns:"22px 1fr 26px 26px 26px 26px 26px 26px 30px",gap:4,padding:"10px 12px",background:C.card2}}>
+          {["#","Squadra","G","V","P","S","GF","GA","Pts"].map(h=><span key={h} style={{fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.muted,textAlign:"center",letterSpacing:1}}>{h}</span>)}
+        </div>
+        {standings.map((row,i)=>(
+          <div key={row.team} style={{display:"grid",gridTemplateColumns:"22px 1fr 26px 26px 26px 26px 26px 26px 30px",gap:4,padding:"12px 12px",alignItems:"center",borderTop:`1px solid ${C.border}`,background:i<2?`${color}0A`:"transparent"}}>
+            <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:i<2?color:C.muted,textAlign:"center"}}>{i+1}</span>
+            <span style={{fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{row.team}</span>
+            {[row.played,row.won,row.drawn,row.lost,row.gf,row.ga].map((v,j)=><span key={j} style={{fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.muted,textAlign:"center"}}>{v}</span>)}
+            <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:i<2?color:C.text,textAlign:"center",textShadow:i<2?`0 0 10px ${color}`:"none"}}>{row.pts}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{textAlign:"center",marginTop:10,fontSize:11,color:C.muted}}>Le prime 2 si qualificano ai quarti di finale</div>
+    </div>
+  );
+}
+
+function ResultsPage({data}){
+  const [active,setActive]=useState("A");
+  const color=GROUP_COLORS[active];
+  return (
+    <div style={{padding:"0 16px 16px"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:4,textAlign:"center",marginTop:20,marginBottom:16,background:`linear-gradient(90deg, ${C.pink}, ${C.orange})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>RISULTATI</div>
+      <div style={{display:"flex",gap:8,marginBottom:20}}>
+        {["A","B","C","D"].map(g=><GroupTab key={g} label={g} active={active===g} color={GROUP_COLORS[g]} onClick={()=>setActive(g)}/>)}
+      </div>
+      {(data.matches[active]||[]).map(m=>(
+        <div key={m.id}>
+          <ScoreCard home={m.home} away={m.away} hScore={m.homeScore} aScore={m.awayScore} played={m.played} accentColor={color}/>
+          {m.played && Object.values(m.scorers||{}).some(a=>a.length>0) && (
+            <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:"0 0 10px 10px",padding:"8px 14px",marginTop:-12,marginBottom:10}}>
+              {Object.entries(m.scorers).map(([team,players])=>players.length>0&&(
+                <div key={team} style={{fontSize:12,color:C.muted,marginBottom:2}}>
+                  <span style={{color,fontFamily:"'Oswald',sans-serif"}}>{team}:</span> {players.filter(p=>p).join(", ")}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ScorersPage({data}){
+  const scorers=computeScorers(data.matches);
+  const gradients=[`linear-gradient(135deg, ${C.gold}, ${C.orange})`,`linear-gradient(135deg, #C0C0C0, #888)`,`linear-gradient(135deg, #CD7F32, #8B4513)`];
+  return (
+    <div style={{padding:"0 16px 16px"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:4,textAlign:"center",marginTop:20,marginBottom:16,background:`linear-gradient(90deg, ${C.green}, ${C.cyan})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>CAPOCANNONIERI</div>
+      {scorers.length===0 && <div style={{textAlign:"center",color:C.muted,fontFamily:"'Oswald',sans-serif",marginTop:40}}>Nessun gol ancora segnato</div>}
+      {scorers.map((s,i)=>{
+        const isTop3=i<3;
+        return (
+          <div key={s.name} style={{display:"flex",alignItems:"center",gap:14,background:C.card,border:`1px solid ${isTop3?(i===0?C.gold:i===1?"#C0C0C0":"#CD7F32")+"60":C.border}`,borderRadius:12,padding:"14px 16px",marginBottom:8,position:"relative",overflow:"hidden"}}>
+            {isTop3&&<div style={{position:"absolute",left:0,top:0,bottom:0,width:4,background:gradients[i]}}/>}
+            <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:isTop3?28:18,minWidth:38,textAlign:"center"}}>{isTop3?["🥇","🥈","🥉"][i]:i+1}</span>
+            <span style={{flex:1,fontFamily:"'Oswald',sans-serif",fontSize:16,color:C.text}}>{s.name}</span>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,color:isTop3?[C.gold,"#C0C0C0","#CD7F32"][i]:C.text}}>{s.goals}</span>
+              <span>⚽</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RostersPage({data}){
+  const [activeTeam,setActiveTeam]=useState(null);
+  return (
+    <div style={{padding:"0 16px 16px"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:4,textAlign:"center",marginTop:20,marginBottom:16,background:`linear-gradient(90deg, ${C.purple}, ${C.pink})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>DISTINTE SQUADRE</div>
+      {activeTeam ? (
+        <div>
+          <button onClick={()=>setActiveTeam(null)} style={{background:`linear-gradient(135deg, ${C.purple}30, ${C.card2})`,border:`1px solid ${C.purple}50`,color:C.purple,padding:"8px 16px",borderRadius:8,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:13,letterSpacing:1,marginBottom:16}}>← TORNA ALLA LISTA</button>
+          <div style={{background:`linear-gradient(135deg, ${C.purple}15, ${C.card})`,border:`1px solid ${C.purple}40`,borderRadius:12,padding:20}}>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:3,background:`linear-gradient(90deg, ${C.purple}, ${C.pink})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",marginBottom:16}}>{activeTeam}</div>
+            {(data.rosters[activeTeam]||[]).filter(p=>p).map((player,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:14,padding:"11px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg, ${C.purple}, ${C.pink})`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Bebas Neue',sans-serif",fontSize:14,color:"#fff",flexShrink:0}}>{i+1}</div>
+                <span style={{fontFamily:"'Oswald',sans-serif",fontSize:15,color:C.text}}>{player}</span>
+              </div>
+            ))}
+            {(data.rosters[activeTeam]||[]).filter(p=>p).length===0 && <div style={{textAlign:"center",color:C.muted,fontFamily:"'Oswald',sans-serif"}}>Rosa non ancora inserita</div>}
+          </div>
+        </div>
+      ) : (
+        Object.entries(data.groups).map(([g,teams])=>{
+          const gc=GROUP_COLORS[g];
+          return (
+            <div key={g} style={{marginBottom:22}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",letterSpacing:4,fontSize:13,color:gc,marginBottom:10,textTransform:"uppercase",textShadow:`0 0 10px ${gc}`}}>● Girone {g}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                {teams.map(team=>(
+                  <button key={team} onClick={()=>setActiveTeam(team)} style={{background:`linear-gradient(135deg, ${gc}12, ${C.card})`,border:`1px solid ${gc}40`,borderRadius:12,padding:"16px 12px",cursor:"pointer",textAlign:"left"}}>
+                    <div style={{fontSize:22,marginBottom:6}}>👕</div>
+                    <div style={{fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.text,marginBottom:4}}>{team}</div>
+                    <div style={{fontSize:11,color:gc}}>{(data.rosters[team]||[]).filter(p=>p).length} giocatori →</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function BracketPage({data}){
+  const ko=data.knockout;
+  return (
+    <div style={{padding:"0 16px 16px"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:4,textAlign:"center",marginTop:20,marginBottom:16,background:`linear-gradient(90deg, ${C.gold}, ${C.orange}, ${C.pink})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>TABELLONE</div>
+      <SectionTitle color={C.cyan}>⚔️ Quarti di finale</SectionTitle>
+      {ko.quarters.map(m=><ScoreCard key={m.id} home={m.home} away={m.away} hScore={m.homeScore} aScore={m.awayScore} played={m.played} accentColor={C.cyan}/>)}
+      <SectionTitle color={C.pink}>🔥 Semifinali</SectionTitle>
+      {ko.semis.map(m=><ScoreCard key={m.id} home={m.home} away={m.away} hScore={m.homeScore} aScore={m.awayScore} played={m.played} accentColor={C.pink}/>)}
+      <SectionTitle color={C.gold}>🏆 Finale</SectionTitle>
+      <div style={{position:"relative",padding:3,borderRadius:14,background:`linear-gradient(135deg, ${C.gold}, ${C.orange}, ${C.pink})`,boxShadow:`0 8px 40px ${C.gold}40`}}>
+        <div style={{background:C.bg,borderRadius:12}}>
+          <ScoreCard home={ko.final.home} away={ko.final.away} hScore={ko.final.homeScore} aScore={ko.final.awayScore} played={ko.final.played} accentColor={C.gold}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const NAV=[
+  {id:"home",icon:"⚽",label:"Home",color:C.cyan},
+  {id:"groups",icon:"📊",label:"Gironi",color:C.green},
+  {id:"results",icon:"🏟️",label:"Risultati",color:C.pink},
+  {id:"scorers",icon:"🥅",label:"Marcatori",color:C.gold},
+  {id:"rosters",icon:"👥",label:"Distinte",color:C.purple},
+  {id:"bracket",icon:"🏆",label:"Tabellone",color:C.orange},
+];
+
+export default function App(){
+  const [page,setPage]=useState("home");
+  const [data,setData]=useState(DEFAULT_DATA);
+  const [loading,setLoading]=useState(true);
+  const [adminOpen,setAdminOpen]=useState(false);
+  const [adminPwInput,setAdminPwInput]=useState("");
+  const [showPwPrompt,setShowPwPrompt]=useState(false);
+  const [tapCount,setTapCount]=useState(0);
+  const [tapTimer,setTapTimer]=useState(null);
+
+  useEffect(()=>{
+    const unsub = onSnapshot(doc(db,"tournament","data"),(snap)=>{
+      if(snap.exists()){
+        const d = snap.data();
+        // merge con DEFAULT_DATA per campi mancanti (retrocompatibilità)
+        setData({...DEFAULT_DATA,...d, events: d.events||[]});
+      }
+      setLoading(false);
+    },(err)=>{
+      console.error("Firebase error:",err);
+      setLoading(false);
+    });
+    return ()=>unsub();
+  },[]);
+
+  const handleSave = async (newData) => {
+    await setDoc(doc(db,"tournament","data"), newData);
+    setData(newData);
+  };
+
+  const handleLogoTap = () => {
+    const newCount = tapCount + 1;
+    setTapCount(newCount);
+    if(tapTimer) clearTimeout(tapTimer);
+    if(newCount >= 5){ setShowPwPrompt(true); setTapCount(0); return; }
+    const t = setTimeout(()=>setTapCount(0), 2000);
+    setTapTimer(t);
+  };
+
+  const handleAdminLogin = () => {
+    if(adminPwInput === ADMIN_PASSWORD){ setAdminOpen(true); setShowPwPrompt(false); setAdminPwInput(""); }
+    else alert("Password errata");
+  };
+
+  const activeColor=NAV.find(n=>n.id===page)?.color||C.gold;
+
+  if(loading) return (
+    <div style={{background:C.bg,height:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:48,letterSpacing:5,background:`linear-gradient(135deg, #fff, ${C.cyan}, ${C.gold})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>AZZURRA</div>
+      <div style={{color:C.muted,fontFamily:"'Oswald',sans-serif",letterSpacing:3,fontSize:13}}>CARICAMENTO...</div>
+    </div>
+  );
+
+  const pages={
+    home:<HomePage data={data}/>,
+    groups:<GroupsPage data={data}/>,
+    results:<ResultsPage data={data}/>,
+    scorers:<ScorersPage data={data}/>,
+    rosters:<RostersPage data={data}/>,
+    bracket:<BracketPage data={data}/>
+  };
+
+  return (
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Oswald:wght@300;400;500;600;700&display=swap');
+        *{margin:0;padding:0;box-sizing:border-box;}
+        body{background:${C.bg};color:${C.text};font-family:'Oswald',sans-serif;}
+        ::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-thumb{background:${C.border};border-radius:4px;}
+        button{-webkit-tap-highlight-color:transparent;}
+        input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(1);opacity:0.6;}
+      `}</style>
+
+      {adminOpen && <AdminPanel data={data} onSave={handleSave} onClose={()=>setAdminOpen(false)}/>}
+
+      {showPwPrompt && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.9)",zIndex:99,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:C.card,border:`1px solid ${C.gold}50`,borderRadius:16,padding:24,width:"100%",maxWidth:320}}>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,color:C.gold,marginBottom:16,textAlign:"center"}}>🔐 ADMIN ACCESS</div>
+            <input type="password" value={adminPwInput} onChange={e=>setAdminPwInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleAdminLogin()} placeholder="Password" style={{background:C.card2,border:`1px solid ${C.border}`,color:C.text,padding:"12px 14px",borderRadius:8,fontFamily:"'Oswald',sans-serif",fontSize:16,width:"100%",marginBottom:12}}/>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>{setShowPwPrompt(false);setAdminPwInput("");}} style={{flex:1,background:C.card2,border:`1px solid ${C.border}`,color:C.muted,padding:"10px",borderRadius:8,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:14}}>Annulla</button>
+              <button onClick={handleAdminLogin} style={{flex:2,background:`linear-gradient(135deg, ${C.gold}, ${C.orange})`,border:"none",color:"#000",padding:"10px",borderRadius:8,cursor:"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:1}}>ENTRA</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{maxWidth:480,margin:"0 auto",minHeight:"100vh",background:C.bg}}>
+        <div style={{position:"sticky",top:0,zIndex:50,background:`rgba(8,9,14,0.94)`,backdropFilter:"blur(16px)",borderBottom:`1px solid ${activeColor}30`,padding:"12px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:`0 2px 20px ${activeColor}15`}}>
+          <div onClick={handleLogoTap} style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:4,cursor:"pointer",userSelect:"none"}}>
+            <span style={{background:`linear-gradient(90deg, #fff, ${C.cyan})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>AZZURRA </span>
+            <span style={{background:`linear-gradient(90deg, ${C.gold}, ${C.orange})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>CC</span>
+          </div>
+          <GlowBadge color={C.green}>🟢 LIVE</GlowBadge>
+        </div>
+
+        <div style={{paddingBottom:80}}>{pages[page]}</div>
+
+        <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:`rgba(8,9,14,0.97)`,backdropFilter:"blur(16px)",borderTop:`1px solid ${activeColor}30`,display:"flex",padding:"8px 2px 14px"}}>
+          {NAV.map(item=>{
+            const isActive=page===item.id;
+            return (
+              <button key={item.id} onClick={()=>setPage(item.id)} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",padding:"4px 0"}}>
+                <div style={{width:36,height:36,borderRadius:10,background:isActive?`linear-gradient(135deg, ${item.color}30, ${item.color}15)`:"transparent",border:isActive?`1px solid ${item.color}60`:"1px solid transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,boxShadow:isActive?`0 0 16px ${item.color}40`:"none"}}>{item.icon}</div>
+                <span style={{fontFamily:"'Oswald',sans-serif",fontSize:9,letterSpacing:1,color:isActive?item.color:C.muted,textTransform:"uppercase",textShadow:isActive?`0 0 8px ${item.color}`:"none"}}>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
 }
